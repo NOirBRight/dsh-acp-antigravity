@@ -1,0 +1,57 @@
+# @deepseek-ai/dsh-acp-antigravity
+
+Google Antigravity ACP provider for DeepSeek Harness.
+
+This package adapts the official @agentclientprotocol/sdk to the provider-neutral contracts in @deepseek-ai/dsh-acp-provider. Antigravity owns native sessions, model discovery, ACP tool execution, OAuth transport, and native permission prompts; DSH receives bounded activity events and supplies interaction and filesystem callbacks.
+
+## Install and verify
+
+```sh
+pnpm install
+pnpm run typecheck
+pnpm run test
+pnpm run build
+```
+
+## Configuration
+
+Configure the Antigravity ACP executable, its sibling localharness_external executable, and an isolated state directory. The provider does not search for alternate binaries or reuse ambient profiles.
+
+```ts
+import { AntigravityProvider } from "@deepseek-ai/dsh-acp-antigravity"
+import { ExternalAgentProviderRegistry } from "@deepseek-ai/dsh-acp-provider"
+
+const provider = new AntigravityProvider({
+  executablePath: '/opt/antigravity/agy_acp_server',
+  harnessPath: '/opt/antigravity/localharness_external',
+  stateDirectory: '/var/lib/dsh/antigravity',
+  instanceId: 'default',
+})
+const registry = new ExternalAgentProviderRegistry()
+const unregister = registry.register(provider)
+const models = await provider.listModels()
+await unregister()
+```
+
+Installation paths are explicit. On Linux the launch uses the provider-required --uid= argument; Windows accepts drive-letter and UNC working directories.
+
+## Authentication and Settings
+
+Authentication uses personal Google OAuth through the ACP server. OAuth data is stored in a profile derived from stateDirectory and instanceId; credentials and authorization codes are not returned in health or Settings snapshots.
+
+Use createAntigravitySettingsEditor() to expose installation validation, model refresh, sign-in, and sign-out through the generic Settings editor. The editor reports installation, authentication, liveness, and readiness separately.
+
+## Session behavior
+
+- The provider accepts approval-required, auto-accept-edits, and full-access modes and applies the native mode before each prompt.
+- Full access requires confirmation and a value-free audit callback before ACP startup.
+- Native permission option IDs are preserved exactly; allow_always is accepted only with a native session or thread scope.
+- Native tool activity is published as activity and is never re-executed by DSH.
+- ACP cancellation sends session/cancel, then closes the transport if the process does not quiesce within the bounded escalation window.
+- DSH-owned filesystem roots are forwarded to ACP as additional directories. Read and write requests use the host filesystem adapter and its required operation-aware path resolver; terminal methods are not exposed.
+
+## Host composition
+
+installAntigravityProvider() mounts the provider in an external-agent registry and optionally mounts its Settings editor. The package is usable with a host implementing those registry interfaces; the DSH checkout currently lacks the primary external-agent turn-driver and session-event hooks required for in-tree mounting.
+
+The provider does not start a replacement DSH server and does not claim that an out-of-tree registry adapter is a complete DSH integration.

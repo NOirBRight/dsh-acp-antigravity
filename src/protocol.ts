@@ -1,0 +1,255 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { Transform, Readable as NodeReadable, Writable as NodeWritable } from 'node:stream'
+import {
+  ClientSideConnection,
+  ndJsonStream,
+  type Client,
+  type AuthenticateRequest,
+  type CancelNotification,
+  type CloseSessionRequest,
+  type CreateElicitationResponse,
+  type InitializeRequest,
+  type LoadSessionRequest,
+  type LogoutRequest,
+  type NewSessionRequest,
+  type PromptRequest,
+  type RequestPermissionResponse,
+  type ResumeSessionRequest,
+  type SetSessionConfigOptionRequest,
+  type SetSessionModeRequest,
+  type WriteTextFileResponse,
+  type ReadTextFileResponse,
+} from '@agentclientprotocol/sdk'
+import { ANTIGRAVITY_AUTH_STDOUT_PREFIX, parseAntigravityAuthPrelude, redactAntigravityText } from './auth.js'
+import type { AntigravityAuthorizationRequest } from './types.js'
+import type { AntigravityLaunchSpec } from './installation.js'
+
+/** Handler for one ACP request initiated by the native agent. */
+export type AcpRequestHandler = (method: string, params: unknown, id: number | string) => Promise<unknown>
+/** Handler for one ACP notification initiated by the native agent. */
+export type AcpNotificationHandler = (method: string, params: unknown) => void
+
+/** Provider-facing ACP connection seam; production uses the official SDK below. */
+export interface AcpConnection {
+  request(method: string, params?: unknown, signal?: AbortSignal): Promise<unknown>
+  notify(method: string, params?: unknown): void
+  setRequestHandler(handler: AcpRequestHandler | undefined): void
+  setNotificationHandler(handler: AcpNotificationHandler | undefined): void
+  close(): Promise<void>
+}
+
+/** Options for the official SDK stdio transport. */
+export interface StdioAcpOptions {
+  readonly maxLineBytes?: number
+  readonly onStderr?: (text: string) => void
+  readonly onAuthorizationUrl?: (request: AntigravityAuthorizationRequest) => void
+}
+
+/** Start the configured executable with the official ACP TypeScript SDK. */
+export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioAcpOptions = {}): AcpConnection {
+  const maxLineBytes = options.maxLineBytes ?? 16 * 1024 * 1024
+  if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) throw new RangeError('maxLineBytes must be a positive safe integer')
+  const child = spawn(spec.command, [...spec.args], {
+    cwd: spec.cwd,
+    env: spec.env,
+    shell: false,
+    detached: process.platform !== 'win32',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let authPrelude = ''
+  let authorizationState: string | undefined
+  const emitAuthorization = (raw: string, strict: boolean): void => {
+    if (options.onAuthorizationUrl === undefined || authorizationState !== undefined) return
+    authPrelude = (authPrelude + raw).slice(-16 * 1024 * 1024)
+    let authorization: AntigravityAuthorizationRequest | null
+    try { authorization = parseAntigravityAuthPrelude(authPrelude) } catch (error) {
+      if (strict) throw error
+      return
+    }
+    if (authorization === null) return
+    authorizationState = authorization.state
+    options.onAuthorizationUrl(authorization)
+  }
+  const guard = new LineBoundTransform(maxLineBytes, line => emitAuthorization(line, true))
+  child.stdout.pipe(guard)
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk: string) => {
+    const raw = String(chunk)
+    options.onStderr?.(redactAntigravityText(raw))
+    emitAuthorization(raw, false)
+  })
+  const connection = new SdkAcpConnection(child, guard)
+  guard.once('error', error => connection.fail(error))
+  child.once('error', error => connection.fail(error))
+  child.once('exit', (code, signal) => connection.fail(new Error('Antigravity ACP process exited (' + String(code ?? signal ?? 'unknown') + ')')))
+  return connection
+}
+
+/** Adapter around ClientSideConnection that retains the generic seam for test fakes. */
+class SdkAcpConnection implements AcpConnection {
+  private requestHandler: AcpRequestHandler | undefined
+  private notificationHandler: AcpNotificationHandler | undefined
+  private closed = false
+  private readonly sdk: ClientSideConnection
+  private readonly child: ChildProcessWithoutNullStreams
+  private readonly guard: LineBoundTransform
+
+  constructor(child: ChildProcessWithoutNullStreams, guard: LineBoundTransform) {
+    this.child = child
+    this.guard = guard
+    const client: Client = {
+      requestPermission: params => this.callClient('session/request_permission', params) as Promise<unknown> as Promise<RequestPermissionResponse>,
+      sessionUpdate: async params => { this.notificationHandler?.('session/update', params) },
+      readTextFile: params => this.callClient('fs/read_text_file', params) as Promise<unknown> as Promise<ReadTextFileResponse>,
+      writeTextFile: params => this.callClient('fs/write_text_file', params) as Promise<unknown> as Promise<WriteTextFileResponse>,
+      unstable_createElicitation: async params => toElicitationResponse(await this.callClient('elicitation/create', params)),
+      extMethod: async (method, params) => {
+        const result = await this.callClient(method, params)
+        if (!isRecord(result)) throw new Error('ACP extension response is malformed: ' + method)
+        return result
+      },
+      extNotification: async (method, params) => { await this.callClient(method, params) },
+    }
+    this.sdk = new ClientSideConnection(() => client, ndJsonStream(
+      NodeWritable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+      NodeReadable.toWeb(guard) as ReadableStream<Uint8Array>,
+    ))
+  }
+
+  request(method: string, params?: unknown, signal?: AbortSignal): Promise<unknown> {
+    if (this.closed) return Promise.reject(new Error('ACP connection is closed'))
+    const operation = this.dispatch(method, params)
+    return withAbort(operation, signal, () => this.escalateCancellation(method, params))
+  }
+
+  notify(method: string, params?: unknown): void {
+    if (this.closed) return
+    if (method === 'session/cancel') void this.sdk.cancel(asAcp<CancelNotification>(params, 'session/cancel')).catch(() => { /* The process may already be gone. */ })
+  }
+
+  setRequestHandler(handler: AcpRequestHandler | undefined): void { this.requestHandler = handler }
+  setNotificationHandler(handler: AcpNotificationHandler | undefined): void { this.notificationHandler = handler }
+
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.guard.destroy()
+    this.child.stdin.destroy()
+    await terminateProcess(this.child)
+  }
+
+  fail(error: unknown): void {
+    if (this.closed) return
+    this.closed = true
+    this.guard.destroy(error instanceof Error ? error : new Error('ACP transport failed'))
+    this.child.stdin.destroy()
+    void terminateProcess(this.child)
+  }
+
+  private escalateCancellation(method: string, params: unknown): () => void {
+    if (method === 'session/prompt' && isRecord(params) && typeof params.sessionId === 'string') this.notify('session/cancel', { sessionId: params.sessionId })
+    const timer = setTimeout(() => { if (!this.closed) void this.close() }, 500)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  }
+
+  private callClient(method: string, params: unknown): Promise<unknown> {
+    const handler = this.requestHandler
+    if (handler === undefined) return Promise.reject(new Error('ACP client request handler is unavailable'))
+    return handler(method, params, requestId(params))
+  }
+
+  private dispatch(method: string, params: unknown): Promise<unknown> {
+    switch (method) {
+      case 'initialize': return this.sdk.initialize(asAcp<InitializeRequest>(params, method))
+      case 'authenticate': return this.sdk.authenticate(asAcp<AuthenticateRequest>(params, method))
+      case 'session/new': return this.sdk.newSession(asAcp<NewSessionRequest>(params, method))
+      case 'session/load': return this.sdk.loadSession(asAcp<LoadSessionRequest>(params, method))
+      case 'session/resume': return this.sdk.resumeSession(asAcp<ResumeSessionRequest>(params, method))
+      case 'session/set_mode': return this.sdk.setSessionMode(asAcp<SetSessionModeRequest>(params, method))
+      case 'session/set_config_option': return this.sdk.setSessionConfigOption(asAcp<SetSessionConfigOptionRequest>(params, method))
+      case 'session/prompt': return this.sdk.prompt(asAcp<PromptRequest>(params, method))
+      case 'session/close': return this.sdk.closeSession(asAcp<CloseSessionRequest>(params, method))
+      case 'logout': return this.sdk.logout(asAcp<LogoutRequest>(params, method))
+      default: return Promise.reject(new Error('Unsupported ACP client request: ' + method))
+    }
+  }
+}
+
+/** Bound complete newline-delimited JSON records before the SDK parses them. */
+class LineBoundTransform extends Transform {
+  private pending = Buffer.alloc(0)
+  constructor(private readonly maxLineBytes: number, private readonly onPrelude?: (line: string) => void) { super() }
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error) => void): void {
+    this.pending = Buffer.concat([this.pending, chunk])
+    while (true) {
+      const newline = this.pending.indexOf(0x0a)
+      if (newline < 0) break
+      const line = this.pending.subarray(0, newline)
+      this.pending = this.pending.subarray(newline + 1)
+      if (line.byteLength > this.maxLineBytes) { callback(new Error('ACP JSON line exceeds configured bound')); return }
+      const text = line.toString('utf8')
+      if (text.includes(ANTIGRAVITY_AUTH_STDOUT_PREFIX)) {
+        try { this.onPrelude?.(text) } catch (error) { callback(error instanceof Error ? error : new Error('invalid ACP authentication prelude')); return }
+      } else this.push(Buffer.concat([line, Buffer.from([0x0a])]))
+    }
+    if (this.pending.byteLength > this.maxLineBytes) callback(new Error('ACP JSON line exceeds configured bound'))
+    else callback()
+  }
+  override _flush(callback: (error?: Error) => void): void {
+    if (this.pending.byteLength > 0) callback(new Error('ACP stream ended with an incomplete JSON line'))
+    else callback()
+  }
+}
+
+async function terminateProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const pid = child.pid
+  try { if (pid !== undefined && process.platform !== 'win32') process.kill(-pid, 'SIGTERM'); else child.kill('SIGTERM') } catch { /* The child exited between the state check and signal. */ }
+  await waitForExit(child, 500)
+  if (child.exitCode === null && child.signalCode === null) {
+    try { if (pid !== undefined && process.platform !== 'win32') process.kill(-pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* The child exited during graceful teardown. */ }
+    await waitForExit(child, 500)
+  }
+}
+
+function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, timeoutMs)
+    child.once('exit', () => { clearTimeout(timer); resolve() })
+  })
+}
+
+function withAbort<T>(operation: Promise<T>, signal: AbortSignal | undefined, onAbort: () => (() => void) | void): Promise<T> {
+  if (signal === undefined) return operation
+  if (signal.aborted) {
+    const cleanup = onAbort() ?? (() => undefined)
+    void operation.then(cleanup, cleanup)
+    return Promise.reject(new DOMException('The operation was aborted', 'AbortError'))
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (): void => { if (settled) return; settled = true; signal.removeEventListener('abort', abort) }
+    const abort = (): void => {
+      const cleanup = onAbort() ?? (() => undefined)
+      void operation.then(cleanup, cleanup)
+      finish()
+      reject(new DOMException('The operation was aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    operation.then(value => { finish(); resolve(value) }, error => { finish(); reject(error) })
+  })
+}
+
+function asAcp<T>(value: unknown, method: string): T {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('ACP ' + method + ' parameters are malformed')
+  return value as T
+}
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
+function requestId(params: unknown): number { return typeof params === 'object' && params !== null && 'requestId' in params && typeof params.requestId === 'number' ? params.requestId : 0 }
+function toElicitationResponse(value: unknown): CreateElicitationResponse {
+  if (!isRecord(value) || !Array.isArray(value.answers) || value.answers.length === 0) return { action: 'decline' }
+  const answer = value.answers[0]
+  return typeof answer === 'string' ? { action: 'accept', content: { answer } } : { action: 'decline' }
+}
