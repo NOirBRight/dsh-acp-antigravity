@@ -113,7 +113,6 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
     setDraft(next.rows[0])
     try {
       if ((next.rows[0]?.executablePath ?? '').trim() === '') await run('probe-installation')
-      else await run('validate-installation')
       next = await load()
       setSnapshot(next)
       setDraft(next.rows[0])
@@ -134,7 +133,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
       void load().then(next => {
         setSnapshot(next)
         setDraft(next.rows[0])
-        if (next.install?.phase === 'succeeded') void run('validate-installation').then(() => load()).then(after => { setSnapshot(after); setDraft(after.rows[0]) }).catch(() => undefined)
+        if (next.install?.phase === 'succeeded' || next.install?.phase === 'failed') return
       }).catch(() => undefined)
     }, 500)
     return () => window.clearInterval(timer)

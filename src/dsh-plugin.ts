@@ -3,7 +3,7 @@ import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { join } from 'node:path'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
-import { deriveAntigravityHarnessPath } from './installation.js'
+import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
@@ -80,9 +80,6 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       toProviderConfig(next),
       { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => { authorizationUrl = request.authorizationUrl } },
     )
-    if (next.executablePath.trim() !== '' && next.harnessPath.trim() !== '') {
-      try { await installed.provider.validateInstallation() } catch { /* health already records the failure */ }
-    }
   }
 
   const snapshot = async (): Promise<AcpSettingsSnapshot> => {
@@ -98,7 +95,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       stateDirectory: live.stateDirectory,
       ...(live.model === undefined ? {} : { model: live.model }),
       models,
-      installed: editor?.status.installed ?? (health !== undefined && health.status !== 'missing-installation' && health.status !== 'invalid-installation'),
+      installed: !('status' in await validateAntigravityInstallation(toProviderConfig(live))),
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
       live: editor?.status.live ?? false,
       ready: editor?.status.ready ?? health?.status === 'ready',
@@ -157,8 +154,6 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           const next = { ...live, executablePath: found.executablePath, harnessPath: found.harnessPath }
           await mount(next)
           savePersistedConfig(home, next)
-        } else if (!empty) {
-          try { await installed.provider.validateInstallation() } catch { /* health already records the failure */ }
         }
         return found
       }
