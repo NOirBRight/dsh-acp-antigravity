@@ -35,3 +35,17 @@ _Avoid_: exit_plan_mode, DSH plan card
 **Elicitation**:
 A native protocol ask (permission or questions API) that can become a DSH question card. Markdown questions in assistant text are not elicitation.
 _Avoid_: Grill card, ask_user_question (DSH tool the native agent does not have)
+
+Provider directory, role badge, and quota are defined in `dsh-llm-providers-ui` CONTEXT.md.
+
+**DSH subagent (parent → EA)**:
+A DSH parent loop starts a child whose selected model is Antigravity. The child is a new DSH session using the Antigravity LLM adapter (new ACP session). Model Switch subagent policy can pick it. An Antigravity parent does not call DSH subagent tools.
+_Avoid_: ACP nested agent as DSH subagent, delegate RPC
+
+**Runtime lock**:
+After the first successful ACP `openSession` in a DSH session, other Model Switch groups are disabled. Switching models or High/Low inside Antigravity stays allowed. A failed turn keeps the lock. A new DSH session unlocks.
+_Avoid_: Per-turn lock, hide groups
+
+**ACP tool row**:
+Native tool activity rendered by a conversation node that copies DSH ToolRow tokens (`--dsw`, disclosure, path links). Not a DSH `tool-call` block (the loop would execute it).
+_Avoid_: Markdown dump, fake DSH tool
