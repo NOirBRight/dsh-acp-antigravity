@@ -189,6 +189,7 @@ describe('Antigravity mapping and safety', () => {
     expect(env.GEMINI_API_KEY).toBeUndefined()
     expect(env.GEMINI_HOME).toBe('/tmp/profile')
     expect(env.ANTIGRAVITY_HARNESS_PATH).toBe('/tmp/harness')
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
   })
 
   it('refuses a symlinked settings file', async () => {
