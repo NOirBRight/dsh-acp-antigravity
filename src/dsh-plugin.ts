@@ -65,6 +65,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   let probeMessage: string | undefined
   let install: ManagedInstallProgress | undefined
   let installJob: Promise<void> | undefined
+  let signingIn = false
+  let signInJob: Promise<void> | undefined
   const registry = new ExternalAgentProviderRegistry()
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
@@ -108,7 +110,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       ...(health?.profileDirectory === undefined ? {} : { profileDirectory: health.profileDirectory }),
       ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
     }
-    return { title: 'External Agents', rows: [row], ...(install === undefined ? {} : { install: { phase: install.phase, downloadedBytes: install.downloadedBytes, totalBytes: install.totalBytes, message: install.message } }) }
+    return { title: 'External Agents', rows: [row], ...(install === undefined ? {} : { install: { phase: install.phase, downloadedBytes: install.downloadedBytes, totalBytes: install.totalBytes, message: install.message } }), ...(signingIn ? { signingIn: true } : {}) }
   }
 
   await mount(live)
@@ -128,6 +130,13 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }
+      }
+      if (action === 'sign-in') {
+        if (signInJob === undefined) {
+          signingIn = true
+          signInJob = installed.provider.signIn().catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined })
+        }
+        return { started: true }
       }
       if (action === 'install-runtime') {
         if (installJob === undefined) {

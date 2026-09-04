@@ -1,5 +1,5 @@
 /** External Agents settings page for the Antigravity ACP provider. */
-import { useEffect, useState, type CSSProperties, type JSX } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AcpInstallProgress, AcpSettingsRow, AcpSettingsSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
@@ -51,9 +51,11 @@ function ProviderCard(props: {
   onChange: (row: AcpSettingsRow) => void
   onLocate: (target: 'executablePath' | 'harnessPath') => void
   onRun: (action: string) => void
+  onSignIn: () => void
   install?: AcpInstallProgress
+  signingIn?: boolean
 }): JSX.Element {
-  const { row, t, onChange, onLocate, onRun, install } = props
+  const { row, t, onChange, onLocate, onRun, onSignIn, install, signingIn } = props
   const installing = install?.phase === 'downloading' || install?.phase === 'extracting' || install?.phase === 'verifying'
   const missing = !row.installed
   return (
@@ -91,7 +93,7 @@ function ProviderCard(props: {
         <button type='button' style={ghostBtn} disabled={installing} onClick={() => onRun('install-runtime')}>{installing ? t('installing') : t('install')}</button>
         {row.authenticated
           ? <button type='button' style={ghostBtn} onClick={() => onRun('sign-out')}>{t('signOut')}</button>
-          : <button type='button' style={ghostBtn} onClick={() => onRun('sign-in')}>{t('signIn')}</button>}
+          : <button type='button' style={ghostBtn} disabled={signingIn === true} onClick={onSignIn}>{signingIn === true ? t('signingIn') : t('signIn')}</button>}
         {row.authorizationUrl
           ? <a href={row.authorizationUrl} target='_blank' rel='noreferrer' style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>{t('openLogin')}</a>
           : null}
@@ -106,6 +108,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   const [draft, setDraft] = useState<AcpSettingsRow | undefined>(undefined)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [error, setError] = useState<string | undefined>(undefined)
+  const loginWindow = useRef<Window | null>(null)
 
   const refresh = async (): Promise<void> => {
     let next = await load()
@@ -117,7 +120,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
       setSnapshot(next)
       setDraft(next.rows[0])
     } catch { /* keep the snapshot when PATH probe is unavailable */ }
-    if (next.rows[0]?.installed) {
+    if (next.rows[0]?.authenticated) {
       try { await run('refresh-models') } catch { /* models stay empty until sign-in */ }
       const after = await load()
       setSnapshot(after)
@@ -138,6 +141,21 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
     }, 500)
     return () => window.clearInterval(timer)
   }, [installPhase, load])
+  const signingIn = snapshot?.signingIn === true
+  useEffect(() => {
+    if (!signingIn) return
+    const timer = window.setInterval(() => {
+      void load().then(next => {
+        setSnapshot(next)
+        setDraft(next.rows[0])
+        const url = next.rows[0]?.authorizationUrl
+        if (url !== undefined && loginWindow.current !== null && !loginWindow.current.closed) {
+          try { loginWindow.current.location.href = url } catch { /* cross-origin after Google redirect */ }
+        }
+      }).catch(() => undefined)
+    }, 500)
+    return () => window.clearInterval(timer)
+  }, [signingIn, load])
 
   const row = draft
   return (
@@ -174,6 +192,11 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
               })
             }}
             install={snapshot.install}
+            signingIn={snapshot.signingIn}
+            onSignIn={() => {
+              loginWindow.current = window.open('about:blank', 'antigravity-oauth')
+              void run('sign-in').then(() => load()).then(next => { setSnapshot(next); setDraft(next.rows[0]) }).catch(caught => setError(caught instanceof Error ? caught.message : t('failed')))
+            }}
             onRun={action => { void run(action).then(() => refresh()).catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }}
           />
         )}

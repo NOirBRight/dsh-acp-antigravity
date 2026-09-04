@@ -50,6 +50,7 @@ export interface AcpSettingsSnapshot {
   readonly title: 'External Agents'
   readonly rows: readonly AcpSettingsRow[]
   readonly install?: AcpInstallProgress
+  readonly signingIn?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +95,7 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
   const install = isRecord(value.install) && typeof value.install.phase === 'string' && typeof value.install.message === 'string' && typeof value.install.downloadedBytes === 'number' && typeof value.install.totalBytes === 'number'
     ? { phase: value.install.phase as AcpInstallProgress['phase'], downloadedBytes: value.install.downloadedBytes, totalBytes: value.install.totalBytes, message: value.install.message }
     : undefined
-  return { title: 'External Agents', rows, ...(install === undefined ? {} : { install }) }
+  return { title: 'External Agents', rows, ...(install === undefined ? {} : { install }), ...(value.signingIn === true ? { signingIn: true } : {}) }
 }
 
 /** Decode a persisted Settings document. */
