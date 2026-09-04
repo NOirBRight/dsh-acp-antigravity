@@ -47,7 +47,9 @@ export function parseAntigravityModels(value: unknown): readonly ExternalAgentMo
 /** Resolve a saved model without substituting another account model. */
 export function resolveAntigravityModel(selected: string | undefined, models: readonly ExternalAgentModel[]): ExternalAgentModel {
   const requested = selected ?? ANTIGRAVITY_DEFAULT_MODEL
-  const found = models.find(model => model.id === requested)
+  const found = models.find(model => String(model.id) === requested)
+    ?? models.find(model => String(model.id) === requested + '-high')
+    ?? models.find(model => String(model.id).startsWith(requested + '-'))
   if (!found) throw new Error('Antigravity model is unavailable: ' + requested)
   return found
 }

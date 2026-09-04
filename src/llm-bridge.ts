@@ -10,6 +10,7 @@ import {
   type ExternalAgentSession,
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
+import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
 import { isRecord } from './decode.js'
 
 const APPROVE_LABEL = 'Approve'
@@ -74,7 +75,8 @@ export function inPlanMode(messages: readonly unknown[], tools?: readonly { name
 }
 
 export function looksLikePlan(text: string): boolean {
-  return /^#\s+\S/m.test(text.trim())
+  const heading = text.split(String.fromCharCode(10)).some(line => line.startsWith('# ') && line.length > 2)
+  return heading || text.includes('plan.md') || text.includes('Proceed')
 }
 
 function estimateTokens(text: string): number {
@@ -82,11 +84,44 @@ function estimateTokens(text: string): number {
 }
 
 function formatToolActivity(event: { name: string; status: string; input?: string; output?: string; error?: string }): string {
-  const parts = [event.name, event.status]
-  if (event.input) parts.push(event.input)
-  if (event.output) parts.push(event.output)
-  if (event.error) parts.push(event.error)
-  return parts.join(' · ') + String.fromCharCode(10)
+  const title = event.name.replace(/_/g, ' ')
+  const target = toolTarget(event.input)
+  const bits = [`**${title}**`, ...(target === undefined ? [] : [target]), event.status]
+  if (event.error) bits.push(event.error)
+  return bits.join(' · ') + String.fromCharCode(10) + String.fromCharCode(10)
+}
+
+function toolTarget(input?: string): string | undefined {
+  if (input === undefined || input.length === 0) return undefined
+  let parsed: Record<string, unknown> | undefined
+  try {
+    const value = JSON.parse(input) as unknown
+    if (isRecord(value)) parsed = value
+  } catch { /* raw command line */ }
+  const path = parsed === undefined
+    ? undefined
+    : stringField(parsed, 'AbsolutePath') ?? stringField(parsed, 'file_path') ?? stringField(parsed, 'directory_path') ?? stringField(parsed, 'path')
+  if (path !== undefined) return fileLink(path)
+  const command = parsed === undefined ? undefined : stringField(parsed, 'CommandLine')
+  if (command !== undefined) return '`' + command + '`'
+  if (input.length < 120 && !input.startsWith('{')) return '`' + input + '`'
+  return undefined
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | undefined {
+  const item = value[key]
+  return typeof item === 'string' && item.length > 0 ? item : undefined
+}
+
+function fileLink(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1) || path
+  return '[' + name + '](file://' + path + ')'
+}
+
+export function workspaceRootFromMessages(messages: readonly unknown[]): string | undefined {
+  const blob = messages.map(message => textOf(message)).join(String.fromCharCode(10))
+  const match = /session workspace:\s*["']([^"']+)["']/i.exec(blob) ?? /workspace:\s*["'](\/[^"']+)["']/i.exec(blob)
+  return match?.[1]
 }
 
 function formatPlanUpdate(event: { summary: string; steps: readonly string[] }): string {
@@ -110,6 +145,7 @@ type StreamOptions = {
   signal?: AbortSignal
   sessionId?: string
   tools?: readonly { name?: string }[]
+  reasoningEffort?: string
 }
 
 type Chunk = { type: string; [key: string]: unknown }
@@ -130,25 +166,34 @@ export function createAntigravityLlmBridge(
 } {
   const sessions = new Map<string, ExternalAgentSession>()
   let turns = 0
+  async function nativeModels(): Promise<readonly { id: string; name: string }[]> {
+    const cached = getCachedModels?.() ?? []
+    if (cached.length > 0) return cached
+    const installed = getProvider()
+    if (installed === undefined) return []
+    try {
+      const listed = await installed.listModels()
+      const models = listed.map(model => ({ id: String(model.id), name: model.name }))
+      setCachedModels?.(models)
+      return models
+    } catch {
+      return []
+    }
+  }
   return {
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
     providerRetryPolicy: () => undefined,
     imageRequestPricing: () => undefined,
     listModels: async provider => {
-      const cached = getCachedModels?.() ?? []
-      if (cached.length > 0) return cached.map(model => ({ provider, id: model.id, name: model.name }))
-      const installed = getProvider()
-      if (installed === undefined) return []
-      try {
-        const listed = await installed.listModels()
-        const models = listed.map(model => ({ id: String(model.id), name: model.name }))
-        setCachedModels?.(models)
-        return models.map(model => ({ provider, id: model.id, name: model.name }))
-      } catch {
-        return []
-      }
+      const native = await nativeModels()
+      return collapseAntigravityModels(native).map(model => ({ provider, ...model }))
     },
-    resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+    resolveModel: async (provider, model) => {
+      const collapsed = collapseAntigravityModels(await nativeModels())
+      const found = collapsed.find(item => item.id === model) ?? collapsed.find(item => item.id === peelEffort(model).logical)
+      if (found === undefined) return { provider, id: model, name: model }
+      return { provider, ...found }
+    },
     async prepareCall(provider, model, signal) {
       return {
         model: await this.resolveModel(provider, model, signal),
@@ -161,17 +206,22 @@ export function createAntigravityLlmBridge(
         if (installed === undefined) throw new Error('Antigravity is not configured')
         const key = options.sessionId ?? 'default'
         const permissionMode = permissionModeFromMessages(options.messages)
+        const natives = await nativeModels()
+        const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
+        const workspaceRoot = workspaceRootFromMessages(options.messages)
         let session = sessions.get(key)
         if (session === undefined) {
           session = await installed.openSession({
-            route: createSessionModelRoute('external-agent', String(installed.info.id), options.model),
+            route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
             session: sessionId(key),
             permissionMode,
+            ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
             ...(options.signal === undefined ? {} : { signal: options.signal }),
           })
           sessions.set(key, session)
         }
         const pending: { kind: 'thought' | 'text'; text: string }[] = []
+        let sawPlan = false
         let wake: (() => void) | undefined
         const push = (kind: 'thought' | 'text', text: string): void => {
           if (text.length === 0) return
@@ -183,7 +233,10 @@ export function createAntigravityLlmBridge(
             if (event.type === 'thought-delta') push('thought', event.text)
             else if (event.type === 'assistant-delta') push('text', event.text)
             else if (event.type === 'tool-activity') push('text', formatToolActivity(event))
-            else if (event.type === 'plan-update') push('text', formatPlanUpdate(event))
+            else if (event.type === 'plan-update') {
+              sawPlan = true
+              push('text', formatPlanUpdate(event))
+            }
           },
           requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal),
           requestUserInput: request => decideUserInput(request, hostAsk, options.signal),
@@ -226,7 +279,7 @@ export function createAntigravityLlmBridge(
         let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
         const result = await first
         let assembled = state.text.length > 0 ? state.text : result.text
-        if (inPlanMode(options.messages, options.tools) && looksLikePlan(assembled) && hostAsk?.ask !== undefined) {
+        if (inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
           const approved = await reviewPlan(assembled, hostAsk, options.signal)
           if (approved) {
             const second = session.runTurn({

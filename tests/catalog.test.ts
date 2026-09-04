@@ -1,0 +1,31 @@
+import { describe, expect, it } from 'vitest'
+import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from '../src/catalog.js'
+
+describe('Antigravity catalog collapse', () => {
+  it('peels high/medium/low into one logical id', () => {
+    expect(peelEffort('gemini-3.8-flash-high')).toEqual({ logical: 'gemini-3.8-flash', effort: 'high' })
+    expect(peelEffort('gemini-pro-agent')).toEqual({ logical: 'gemini-pro-agent' })
+  })
+
+  it('exposes High/Medium/Low as reasoning efforts', () => {
+    const collapsed = collapseAntigravityModels([
+      { id: 'default', name: 'Account default' },
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
+      { id: 'gemini-pro-agent', name: 'Gemini 3.1 Pro (High)' },
+    ])
+    const flash = collapsed.find(model => model.id === 'gemini-3.8-flash')
+    expect(flash?.name).toBe('Gemini 3.8 Flash')
+    expect(flash?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium', 'low'])
+    expect(flash?.reasoning?.defaultEffort).toBe('high')
+    expect(collapsed.find(model => model.id === 'gemini-pro-agent')?.reasoning).toBeUndefined()
+  })
+
+  it('maps logical id plus effort back to the native ACP id', () => {
+    const native = ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-pro-agent']
+    expect(nativeAntigravityModelId('gemini-3.8-flash', 'medium', native)).toBe('gemini-3.8-flash-medium')
+    expect(nativeAntigravityModelId('gemini-3.8-flash', undefined, native)).toBe('gemini-3.8-flash-high')
+    expect(nativeAntigravityModelId('gemini-pro-agent', 'high', native)).toBe('gemini-pro-agent')
+  })
+})
