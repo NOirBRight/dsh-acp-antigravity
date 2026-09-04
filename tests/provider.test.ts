@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
@@ -18,6 +18,7 @@ import {
   parseAntigravityAuthPrelude,
   parseAntigravityAuthorizationUrl,
   parseAntigravityModels,
+  prepareAntigravityProfile,
   redactAntigravityText,
   resolveAntigravityProfileDirectory,
   validateAntigravityIdentity,
@@ -126,13 +127,27 @@ describe('Antigravity mapping and safety', () => {
 
   it('derives allow-always scope from the native session request', async () => {
     let scope: unknown
+    let warning: unknown
     const handler = createAntigravityInteractionHandler({
       publish: () => undefined,
-      requestPermission: async request => { scope = request.options[0]?.scope; return { kind: 'allowed-for-session', optionId: request.options[0]!.optionId } },
+      requestPermission: async request => { scope = request.options[0]?.scope; warning = request.securityWarning?.message; return { kind: 'allowed-for-session', optionId: request.options[0]!.optionId } },
       requestUserInput: async () => ({ answers: [] }),
     })
-    await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always' }] }, 1)).resolves.toMatchObject({ outcome: { optionId: 'always' } })
+    await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always', _meta: { 'agy.security.warning': { message: 'Prompt injection risk' } } }] }, 1)).resolves.toMatchObject({ outcome: { optionId: 'always' } })
     expect(scope).toBe('session')
+    expect(warning).toBe('Prompt injection risk')
+  })
+
+  it('normalizes interaction-prefixed permission IDs as user questions', async () => {
+    let question: unknown
+    const handler = createAntigravityInteractionHandler({
+      ...host(),
+      requestPermission: async () => { throw new Error('permission callback must not run') },
+      requestUserInput: async request => { question = request; return { answers: ['Second'] } },
+    })
+    await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { toolCallId: 'interaction_private', title: 'Pick one' }, options: [{ optionId: 'native-a', kind: 'allow_once', name: 'First' }, { optionId: 'native-b', kind: 'reject_once', name: 'Second' }] }, 7)).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'native-b' } })
+    expect(question).toMatchObject({ question: 'Pick one', options: ['First', 'Second'], multiple: false })
+    expect(JSON.stringify(question)).not.toContain('interaction_private')
   })
 
   it('returns the ACP cancelled outcome when a permission wait aborts', async () => {
@@ -145,6 +160,8 @@ describe('Antigravity mapping and safety', () => {
     await expect(unscoped('interaction/permission', { toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always' }] }, 1)).rejects.toThrow(/session or thread scope/)
     const rejected = createAntigravityInteractionHandler({ ...host(), requestPermission: async () => ({ kind: 'reject' }) })
     await expect(rejected('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Once' }] }, 1)).rejects.toThrow(/no native reject option/)
+    const cancelled = createAntigravityInteractionHandler({ ...host(), requestPermission: async () => ({ kind: 'cancel', optionId: optionId('deny') }) })
+    await expect(cancelled('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'deny', kind: 'reject_once', name: 'Deny' }] }, 1)).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
   it('keeps OAuth links safe and redacts credential-looking diagnostics', () => {
@@ -160,13 +177,30 @@ describe('Antigravity mapping and safety', () => {
 
   it('isolates profiles and strips ambient Google credentials from process env', () => {
     expect(resolveAntigravityProfileDirectory('/tmp/dsh', 'a')).not.toBe(resolveAntigravityProfileDirectory('/tmp/dsh', 'b'))
-    const env = buildAntigravityEnvironment({ baseEnv: { PATH: '/bin', GOOGLE_API_KEY: 'secret', GEMINI_API_KEY: 'secret2', UNRELATED_TOKEN: 'secret3' }, profileDirectory: '/tmp/profile', harnessPath: '/tmp/harness' })
+    const env = buildAntigravityEnvironment({ baseEnv: { PATH: '/bin', GOOGLE_API_KEY: 'secret', GEMINI_API_KEY: 'secret2', UNRELATED_TOKEN: 'secret3', FOO_API_KEY_SUFFIX: 'secret4', X_SECRET_VALUE: 'secret5' }, profileDirectory: '/tmp/profile', harnessPath: '/tmp/harness' })
     expect(env.PATH).toBe('/bin')
     expect(env.GOOGLE_API_KEY).toBeUndefined()
     expect(env.UNRELATED_TOKEN).toBeUndefined()
+    expect(env.FOO_API_KEY_SUFFIX).toBeUndefined()
+    expect(env.X_SECRET_VALUE).toBeUndefined()
     expect(env.GEMINI_API_KEY).toBeUndefined()
     expect(env.GEMINI_HOME).toBe('/tmp/profile')
     expect(env.ANTIGRAVITY_HARNESS_PATH).toBe('/tmp/harness')
+  })
+
+  it('refuses a symlinked settings file', async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), 'agy-settings-'))
+    const target = join(stateDirectory, 'target.json')
+    const configured = { ...config(), stateDirectory, instanceId: 'linked-settings' }
+    try {
+      const profile = await prepareAntigravityProfile(configured)
+      await writeFile(target, '{}')
+      await rm(join(profile, 'settings.json'))
+      await symlink(target, join(profile, 'settings.json'))
+      await expect(prepareAntigravityProfile(configured)).rejects.toThrow(/symbolic link/)
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true })
+    }
   })
 
   it('refuses to recursively remove a symlinked profile', async () => {
@@ -176,6 +210,7 @@ describe('Antigravity mapping and safety', () => {
     try {
       await mkdir(dirname(profile), { recursive: true })
       await symlink(target, profile, 'dir')
+      await expect(prepareAntigravityProfile({ ...config(), stateDirectory, instanceId: 'linked' })).rejects.toThrow(/symbolic link/)
       await expect(clearAntigravityProfile({ ...config(), stateDirectory, instanceId: 'linked' })).rejects.toThrow(/symbolic link/)
     } finally {
       await rm(stateDirectory, { recursive: true, force: true })
@@ -187,9 +222,9 @@ describe('Antigravity mapping and safety', () => {
 describe('Antigravity provider lifecycle', () => {
   it('discovers exact models and drives a native turn without duplicating tools', async () => {
     const connections: FakeConnection[] = []
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => { const connection = new FakeConnection(); connections.push(connection); return connection } })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { const connection = new FakeConnection(); connections.push(connection); return connection } })
     await expect(provider.listModels()).resolves.toEqual([{ id: 'default', name: 'Account default', supportedModes: ['approval-required', 'auto-accept-edits', 'full-access'] }, { id: 'gemini-pro', name: 'Gemini Pro', supportedModes: ['approval-required', 'auto-accept-edits', 'full-access'] }])
-    const session = await provider.openSession({ route: route(), session: sessionId('dsh-session'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    const session = await provider.openSession({ route: route(), session: sessionId('dsh-session'), clientFilesystem: clientFilesystem(), permissionMode: 'approval-required', signal: new AbortController().signal })
     const events: string[] = []
     const result = await session.runTurn({ turn: turnId('turn'), prompt: 'read', attachments: [{ name: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }, { name: 'source', path: '/workspace/src/a.ts' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host(events))
     expect(result).toMatchObject({ status: 'completed', text: 'hello' })
@@ -207,25 +242,27 @@ describe('Antigravity provider lifecycle', () => {
 
   it('rejects path attachments outside DSH filesystem roots before prompting', async () => {
     const connection = new FakeConnection()
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => connection })
-    const session = await provider.openSession({ route: route(), session: sessionId('attachment'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('attachment'), clientFilesystem: clientFilesystem(), permissionMode: 'approval-required', signal: new AbortController().signal })
     await expect(session.runTurn({ turn: turnId('attachment-turn'), prompt: 'read', attachments: [{ name: 'secret', path: '/private/secret' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', error: 'outside configured roots' })
     expect(connection.calls.some(call => call.method === 'session/prompt')).toBe(false)
     await session.dispose()
   })
 
-  it('uses the requested workspace root as the native session cwd', async () => {
+  it('uses the requested workspace root without implicitly advertising filesystem access', async () => {
     const cwds: string[] = []
-    const provider = new AntigravityProvider(config(), { cwd: '/fallback', launchSpec: async (_config, cwd) => { cwds.push(cwd); return launchSpec() }, connectionFactory: () => new FakeConnection() })
+    const connection = new FakeConnection()
+    const provider = new AntigravityProvider(config(), { cwd: '/fallback', launchSpec: async (_config, cwd) => { cwds.push(cwd); return launchSpec() }, connectionFactory: () => connection })
     const session = await provider.openSession({ route: route(), session: sessionId('workspace'), workspaceRoot: '/project', permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(cwds).toEqual(['/project'])
+    expect(connection.calls.find(call => call.method === 'initialize')?.params).toMatchObject({ clientCapabilities: {} })
     await session.dispose()
   })
 
   it('resumes with the persisted native ID and complete additional roots', async () => {
     const connection = new FakeConnection()
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: { ...clientFilesystem(), workspaceRoots: ['/workspace', '/shared'] }, launchSpec: async () => launchSpec(), connectionFactory: () => connection })
-    const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: resumeCursor('antigravity', 'native-old'), attachmentRoots: ['/attachments'], permissionMode: 'approval-required', signal: new AbortController().signal })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: resumeCursor('antigravity', 'native-old'), clientFilesystem: { ...clientFilesystem(), workspaceRoots: ['/workspace', '/shared'] }, permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(session.ref.nativeSession).toBe('native-old')
     expect(connection.calls.find(call => call.method === 'session/resume')?.params).toMatchObject({ sessionId: 'native-old', cwd: '/workspace', additionalDirectories: ['/shared', '/attachments'] })
     await session.dispose()
@@ -386,7 +423,9 @@ describe('Antigravity provider lifecycle', () => {
     registry.register(provider)
     await expect(registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', signal: new AbortController().signal })).rejects.toThrow(/confirmation/)
     expect(opened).toBe(0)
-    const session = await registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: 'audit-1', signal: new AbortController().signal })
+    const fullRequest = { route: route(), session: sessionId('s'), permissionMode: 'full-access' as const, fullAccessConfirmed: true, fullAccessAuditId: 'audit-1', signal: new AbortController().signal }
+    const session = await registry.openSession(fullRequest)
+    await expect(provider.openSession(fullRequest)).rejects.toThrow(/provider registry/)
     expect(audit).toEqual(['full-access'])
     expect(opened).toBe(2)
     await session.dispose()
@@ -403,11 +442,16 @@ describe('Antigravity client filesystem', () => {
     await expect(handler('fs/write_text_file', { path: '/workspace/attachments/a.txt', content: 'x' }, 1)).rejects.toThrow(/outside|attachment/)
     await expect(handler('terminal/create', {}, 1)).rejects.toThrow(/unavailable/)
     expect(reads).toEqual(['/workspace/src/a.ts'])
+    const controller = new AbortController()
+    const cancelled = createAntigravityFilesystemHandler(clientFilesystem(), controller.signal)
+    controller.abort()
+    await expect(cancelled('fs/read_text_file', { path: '/workspace/src/a.ts' }, 1)).rejects.toMatchObject({ name: 'AbortError' })
   })
 })
 
 describe('Antigravity official ACP transport', () => {
   it('rejects an invalid cancellation grace period before spawning', () => {
+    expect(() => new AntigravityProvider({ ...config(), cancelGraceMs: 0 }, { connectionFactory: () => new FakeConnection() })).toThrow(/positive safe integer/)
     expect(() => spawnAntigravityAcp(launchSpec(), { cancelGraceMs: 0 })).toThrow(/cancelGraceMs/)
   })
 

@@ -3,6 +3,7 @@ import {
   modelId,
   toolId,
   type ExternalAgentEvent,
+  type ExternalAgentEventBounds,
   type ExternalAgentModel,
   type ExternalAgentPermissionMode,
 } from '@deepseek-ai/dsh-acp-provider'
@@ -83,7 +84,7 @@ export function validateAntigravityIdentity(response: unknown): AntigravityIdent
 }
 
 /** Normalize an ACP session/update notification into one provider-neutral event. */
-export function normalizeAntigravitySessionUpdate(update: unknown, bounds: { readonly maxTextBytes: number; readonly maxPayloadBytes: number }): ExternalAgentEvent | null {
+export function normalizeAntigravitySessionUpdate(update: unknown, bounds: ExternalAgentEventBounds): ExternalAgentEvent | null {
   if (!isRecord(update)) throw new Error('Antigravity session update is malformed')
   const tag = stringValue(update.sessionUpdate) ?? stringValue(update.type)
   if (!tag) throw new Error('Antigravity session update has no type')

@@ -2,13 +2,13 @@
 
 ## Decision
 
-The Antigravity provider implements the provider-neutral External Agent contract with the official @agentclientprotocol/sdk. Each configured instance owns an executable pair, isolated OAuth profile, ACP connections, native sessions, model selection, permission mode, filesystem adapter, and quiescent disposal.
+The Antigravity provider implements the provider-neutral External Agent contract with the official @agentclientprotocol/sdk. Each configured instance owns an executable pair, isolated OAuth profile, ACP connections, native sessions, model selection, permission mode, per-session filesystem adapter, and quiescent disposal.
 
 ## Security and ownership
 
-Installation and identity checks fail before a session is exposed. Personal Google OAuth uses the instance profile; credentials, authorization codes, raw stderr, and private ACP metadata stay out of public health and interaction payloads. Full access requires confirmation and a value-free audit callback before process startup.
+Installation and identity checks fail before a session is exposed. Personal Google OAuth uses the instance profile; credential-like environment values, authorization codes, raw stderr, symlinked profile files, and private ACP metadata stay out of public health and interaction payloads. Full access requires confirmation and a value-free audit callback before process startup.
 
-ACP owns tool execution and native history. The provider publishes normalized, bounded activity, preserves native permission option IDs, sends session/cancel on abort, and closes the wire when cancellation does not quiesce within the bounded escalation window. DSH-owned filesystem handlers remain responsible for path policy and terminal denial.
+ACP owns tool execution and native history. The provider publishes normalized, bounded activity, preserves native permission option IDs, maps interaction-prefixed native prompts to user questions, sends session/cancel on abort, and closes the wire when cancellation does not quiesce within the bounded escalation window. DSH-owned filesystem handlers remain responsible for path policy and terminal denial.
 
 ## Alternatives considered
 

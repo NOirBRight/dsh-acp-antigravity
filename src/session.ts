@@ -4,6 +4,7 @@ import {
   truncateUtf8,
   withBoundedExternalAgentHost,
   type ExternalAgentAttachment,
+  type ExternalAgentEventBounds,
   type ExternalAgentOpenRequest,
   type ExternalAgentProvider,
   type ExternalAgentSession,
@@ -45,7 +46,7 @@ export class AntigravitySession implements ExternalAgentSession {
     let providerFailure: string | undefined
     let events = Promise.resolve()
     const maxTextBytes = this.config.maxEventTextBytes ?? 1024 * 1024
-    const bounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
+    const bounds: ExternalAgentEventBounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
     const boundedHost = withBoundedExternalAgentHost(host, bounds)
     const handler = createAntigravityInteractionHandler(boundedHost, this.filesystem)
     this.connection.setRequestHandler(handler)

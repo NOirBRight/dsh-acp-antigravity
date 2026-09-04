@@ -39,9 +39,19 @@ export function resolveAntigravityProfileDirectory(stateDirectory: string, insta
 /** Create private profile directories and the value-free settings file. */
 export async function prepareAntigravityProfile(config: AntigravityProviderConfig, authMethod: AntigravityAuthMethod = 'oauth-personal'): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
+  try {
+    if ((await lstat(profileDirectory)).isSymbolicLink()) throw new Error('Antigravity profile path must not be a symbolic link')
+  } catch (error) {
+    if (!isFileNotFound(error)) throw error
+  }
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 })
   await chmod(profileDirectory, 0o700)
   const settingsPath = join(profileDirectory, 'settings.json')
+  try {
+    if ((await lstat(settingsPath)).isSymbolicLink()) throw new Error('Antigravity settings path must not be a symbolic link')
+  } catch (error) {
+    if (!isFileNotFound(error)) throw error
+  }
   let settings: Record<string, unknown> = {}
   try {
     const parsed = JSON.parse(await readFile(settingsPath, 'utf8'))
@@ -79,7 +89,7 @@ export function buildAntigravityEnvironment(input: {
   const environment: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(input.baseEnv ?? process.env)) {
     const upper = key.toUpperCase()
-    if (!ambientCredentialKeys.has(upper) && !/(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)$/.test(upper)) environment[key] = value
+    if (!ambientCredentialKeys.has(upper) && !/(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)/.test(upper)) environment[key] = value
   }
   return {
     ...environment,
