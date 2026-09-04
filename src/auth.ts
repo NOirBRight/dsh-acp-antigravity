@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, lstat, mkdir, open, rename, rm } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { URL } from 'node:url'
 import type { ExternalAgentProviderInstanceId } from '@deepseek-ai/dsh-acp-provider'
@@ -49,24 +49,28 @@ export async function prepareAntigravityProfile(config: AntigravityProviderConfi
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 })
   await chmod(profileDirectory, 0o700)
   const settingsPath = join(profileDirectory, 'settings.json')
-  let settingsFile
+  let settings: Record<string, unknown> = {}
   try {
-    settingsFile = await open(settingsPath, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)
+    const settingsFile = await open(settingsPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const source = await settingsFile.readFile('utf8')
+      const parsed = source === '' ? {} : JSON.parse(source)
+      if (!isRecord(parsed)) throw new Error('Antigravity profile settings must be a JSON object')
+      settings = parsed
+    } finally {
+      await settingsFile.close()
+    }
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new Error('Antigravity settings path must not be a symbolic link')
-    throw error
+    if (!isFileNotFound(error)) throw error
   }
+  const auth = isRecord(settings.auth) ? settings.auth : {}
+  const temporary = settingsPath + '.write-' + randomUUID()
   try {
-    const source = await settingsFile.readFile('utf8')
-    const parsed = source === '' ? {} : JSON.parse(source)
-    if (!isRecord(parsed)) throw new Error('Antigravity profile settings must be a JSON object')
-    const auth = isRecord(parsed.auth) ? parsed.auth : {}
-    const output = JSON.stringify({ ...parsed, auth: { ...auth, type: authMethod } }) + '\n'
-    await settingsFile.truncate(0)
-    await settingsFile.write(output, 0, 'utf8')
-    await settingsFile.chmod(0o600)
+    await writeFile(temporary, JSON.stringify({ ...settings, auth: { ...auth, type: authMethod } }) + '\n', { flag: 'wx', mode: 0o600 })
+    await rename(temporary, settingsPath)
   } finally {
-    await settingsFile.close()
+    await rm(temporary, { force: true })
   }
   return profileDirectory
 }

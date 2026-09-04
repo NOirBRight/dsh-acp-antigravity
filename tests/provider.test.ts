@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, providerInstanceId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
+import { ExternalAgentProviderRegistry, TurnAbortedError, auditId, createSessionModelRoute, optionId, providerInstanceId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import {
   antigravityClientCapabilities,
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -197,6 +197,7 @@ describe('Antigravity mapping and safety', () => {
     const configured = { ...config(), stateDirectory, instanceId: providerInstanceId('linked-settings') }
     try {
       const profile = await prepareAntigravityProfile(configured)
+      expect(JSON.parse(await readFile(join(profile, 'settings.json'), 'utf8'))).toMatchObject({ auth: { type: 'oauth-personal' } })
       await writeFile(target, '{}')
       await rm(join(profile, 'settings.json'))
       await symlink(target, join(profile, 'settings.json'))
@@ -357,6 +358,7 @@ describe('Antigravity provider lifecycle', () => {
     const editor = createAntigravitySettingsEditor(config(), provider)
     const fields = editor.snapshot().fields
     expect(fields.find(field => field.key === 'version')?.value).toBe('1.2.3')
+    expect(fields.find(field => field.key === 'profileDirectory')?.value).toBe(provider.health.profileDirectory)
     expect(fields.find(field => field.key === 'fullAccessWarning')?.value).toContain('outside DSH client-filesystem roots')
     expect(editor.snapshot().status).toMatchObject({ authenticated: false, live: false, ready: false })
     await provider.signIn()
@@ -423,12 +425,12 @@ describe('Antigravity provider lifecycle', () => {
     const audit: string[] = []
     let opened = 0
     const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { opened++; return new FakeConnection() } })
-    await expect(provider.openSession({ route: route(), session: sessionId('direct'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: 'direct-audit', signal: new AbortController().signal })).rejects.toThrow(/provider registry/)
+    await expect(provider.openSession({ route: route(), session: sessionId('direct'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: auditId('direct-audit'), signal: new AbortController().signal })).rejects.toThrow(/provider registry/)
     const registry = new ExternalAgentProviderRegistry({ auditFullAccess: entry => { audit.push(entry.mode) } })
     registry.register(provider)
     await expect(registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', signal: new AbortController().signal })).rejects.toThrow(/confirmation/)
     expect(opened).toBe(0)
-    const fullRequest = { route: route(), session: sessionId('s'), permissionMode: 'full-access' as const, fullAccessConfirmed: true, fullAccessAuditId: 'audit-1', signal: new AbortController().signal }
+    const fullRequest = { route: route(), session: sessionId('s'), permissionMode: 'full-access' as const, fullAccessConfirmed: true, fullAccessAuditId: auditId('audit-1'), signal: new AbortController().signal }
     const session = await registry.openSession(fullRequest)
     await expect(provider.openSession(fullRequest)).rejects.toThrow(/provider registry/)
     expect(audit).toEqual(['full-access'])

@@ -59,3 +59,7 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 installAntigravityProvider() mounts the provider in an external-agent registry and optionally mounts its Settings editor. The package is usable with a host implementing those registry interfaces; the DSH checkout currently lacks the primary external-agent turn-driver and session-event hooks required for in-tree mounting.
 
 The provider does not start a replacement DSH server and does not claim that an out-of-tree registry adapter is a complete DSH integration.
+
+## Real-binary smoke
+
+Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm test -- real-binary`. The smoke initializes and validates the user-provided executable pair without authentication or a model request; it skips when either path is absent.

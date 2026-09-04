@@ -33,7 +33,8 @@ export function createAntigravitySettingsEditor(config: AntigravityProviderConfi
       const fields: ExternalAgentSettingsField[] = [
         { key: 'executablePath', label: 'Antigravity ACP executable', kind: 'text', value: config.executablePath },
         { key: 'harnessPath', label: 'localharness_external executable', kind: 'text', value: config.harnessPath },
-        { key: 'stateDirectory', label: 'Private profile directory', kind: 'text', value: config.stateDirectory },
+        { key: 'stateDirectory', label: 'State directory', kind: 'text', value: config.stateDirectory },
+        { key: 'profileDirectory', label: 'Selected private profile', kind: 'status', value: health.profileDirectory },
         { key: 'status', label: 'Installation and account status', kind: 'status', value: health.message ?? health.status },
         ...(health.version === undefined ? [] : [{ key: 'version', label: 'Detected ACP version', kind: 'status' as const, value: health.version }]),
         { key: 'selectedModel', label: 'Selected model', kind: 'status', value: health.model ?? config.model ?? 'account default' },

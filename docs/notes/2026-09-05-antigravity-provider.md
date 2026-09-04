@@ -23,4 +23,4 @@ installAntigravityProvider() targets a host exposing the external-agent registry
 
 ## Verification
 
-Provider tests cover identity and model validation, mode mapping, permission option preservation, OAuth profile isolation, installation paths, filesystem mediation, cancellation, and provider disposal. Typecheck and declaration build cover the official ACP SDK integration.
+Provider tests cover identity and model validation, mode mapping, permission option preservation, OAuth profile isolation, installation paths, filesystem mediation, cancellation, and provider disposal. Typecheck and declaration build cover the official ACP SDK integration. An environment-gated real-binary smoke initializes and validates the user-provided executable pair without a model request.
