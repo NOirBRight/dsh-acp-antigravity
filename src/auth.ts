@@ -41,6 +41,11 @@ export function resolveAntigravityProfileDirectory(stateDirectory: string, insta
 /** Create private profile directories and select the personal OAuth authentication type. */
 export async function prepareAntigravityProfile(config: AntigravityProviderConfig, authMethod: AntigravityAuthMethod = 'oauth-personal'): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
+  try {
+    if ((await lstat(profileDirectory)).isSymbolicLink()) throw new Error('Antigravity profile path must not be a symbolic link')
+  } catch (error) {
+    if (!isFileNotFound(error)) throw error
+  }
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 })
   let profileDirectoryFile
   try {
