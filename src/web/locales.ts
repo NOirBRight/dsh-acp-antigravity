@@ -22,6 +22,7 @@ export type AcpSettingsKey =
   | 'install'
   | 'installing'
   | 'signingIn'
+  | 'badgeAgent'
 
 export const zh: Record<AcpSettingsKey, string> = {
   nav: 'External Agents',
@@ -47,6 +48,7 @@ export const zh: Record<AcpSettingsKey, string> = {
   install: 'Install Antigravity',
   installing: 'Installing…',
   signingIn: 'Opening Google in your default browser…',
+  badgeAgent: 'Agent',
 }
 
 export const en: Record<AcpSettingsKey, string> = { ...zh }

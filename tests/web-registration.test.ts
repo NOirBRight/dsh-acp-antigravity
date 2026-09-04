@@ -8,6 +8,8 @@ function registrationBench() {
     slots: {
       inject: (_name: string, register: () => unknown) => register(),
       register: (spec: Record<string, unknown>, component: unknown) => { entries.push({ spec, component }); return vi.fn() },
+      entries: () => [] as { options: { id?: string } }[],
+      subscribe: () => () => undefined,
     },
     connection: { rpc: { call: vi.fn() } },
     effect: (register: () => unknown) => register(),
@@ -19,8 +21,8 @@ function registrationBench() {
 describe('client plugin composition', () => {
   it('registers the External Agents settings section', () => {
     const { entries } = registrationBench()
-    expect(entries.map(({ spec }) => spec.name)).toEqual(['settings.section'])
-    expect(entries[0]?.spec).toMatchObject({ id: 'external-agents', order: 14 })
+    expect(entries.map(({ spec }) => spec.name)).toEqual(['settings.provider.item'])
+    expect(entries[0]?.spec).toMatchObject({ key: 'antigravity' })
     const face = (entries[0]!.spec.inject as () => Record<string, unknown>)()
     expect(face).toEqual(expect.objectContaining({
       t: expect.any(Function),

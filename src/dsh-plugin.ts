@@ -27,6 +27,7 @@ export interface DshPluginConfig {
 export interface DshPluginContext {
   effect(fn: () => unknown, name?: string): void
   inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => void): void
+  get?(name: string): unknown
   connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
 }
 
@@ -122,7 +123,13 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   await mount(live)
   if (typeof ctx.inject === 'function') {
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
-      const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models, next => { models = [...next] })
+      const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models, next => { models = [...next] }, {
+        ask: async request => {
+          const service = ctx.get?.('userQuestions') as { ask?: (payload: typeof request) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
+          if (service?.ask === undefined) return { answers: [] }
+          return service.ask(request)
+        },
+      })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })
   }

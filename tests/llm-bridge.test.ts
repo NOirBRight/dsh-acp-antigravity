@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { createAntigravityLlmBridge, lastUserText } from '../src/llm-bridge.js'
+import { acpPrompt, createAntigravityLlmBridge, lastUserText, looksLikePlan, permissionModeFromMessages } from '../src/llm-bridge.js'
 import { providerId } from '@deepseek-ai/dsh-acp-provider'
 
 describe('Antigravity LLM bridge', () => {
   it('extracts the latest user text', () => {
+    expect(acpPrompt([
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'do it' }] },
+      { role: 'user', source: { kind: 'skill-invocation', name: 'plan', form: 'instructions' }, content: [{ type: 'text', text: 'SKILL BODY' }] },
+    ])).toBe('SKILL BODY' + String.fromCharCode(10) + String.fromCharCode(10) + 'do it')
+    expect(permissionModeFromMessages([{ content: 'Approval policy: never. danger-full-access' }])).toBe('full-access')
+    expect(looksLikePlan('# Ship it\n1. a')).toBe(true)
     expect(lastUserText([
       { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },

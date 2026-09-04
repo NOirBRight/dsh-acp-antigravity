@@ -62,11 +62,23 @@ export function apply(ctx: ClientContext): void {
     const path = (result.value as { path?: string | null }).path
     return path ?? null
   }
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'external-agents',
-    order: 14,
-    label: () => t('nav'),
+  ctx.slots.inject('settings.provider.item', () => ctx.slots.register({
+    name: 'settings.provider.item',
+    key: 'antigravity',
+    locale: localeNamespace,
     inject: (): AcpSettingsFace => ({ t, load, save, run, pick }),
   }, ExternalAgentsSection))
+  ctx.effect(() => {
+    let warned = false
+    const check = (): void => {
+      const hasProviders = ctx.slots.entries('settings.section').some(entry => entry.options.id === 'providers')
+      if (!hasProviders && !warned) {
+        warned = true
+        console.warn('[dsh-acp-antigravity] LLM Providers page missing; install dsh-llm-providers-ui to show the Antigravity card.')
+      }
+    }
+    const timer = setTimeout(check, 0)
+    const stop = ctx.slots.subscribe('settings.section', check)
+    return () => { clearTimeout(timer); stop() }
+  }, 'dsh-acp-antigravity: providers page diagnostic')
 }

@@ -12,7 +12,7 @@ export interface AcpSettingsFace {
   pick: () => Promise<string | null>
 }
 
-export type ExternalAgentsSectionProps = PropsRuntime<'settings.section'> & InjectFace<AcpSettingsFace>
+export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'> & InjectFace<AcpSettingsFace>
 
 const sectionStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, color: 'var(--dsw-alias-label-primary)' }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, fontWeight: 600, lineHeight: '28px' }
@@ -157,7 +157,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   return (
     <section style={sectionStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <h1 style={titleStyle}>{t('title')}</h1>
+        <h1 style={titleStyle}>{t('title')} <span style={badge}>{t('badgeAgent')}</span></h1>
         <span style={{ marginLeft: 'auto' }} />
         <button type='button' style={ghostBtn} onClick={() => { void refresh().catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }}>{t('rescan')}</button>
         <button
