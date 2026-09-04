@@ -66,6 +66,7 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
       }
     },
     stream: async function* (options) {
+      try {
       const installed = getProvider()
       if (installed === undefined) throw new Error('Antigravity is not configured')
       const key = options.sessionId ?? 'default'
@@ -117,6 +118,13 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
       const text = assembled.length > 0 ? assembled : result.text
       yield { type: 'block-end', index: 0, block: { type: 'text', text } }
       yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: message }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: message } }
+        yield { type: 'finish', reason: 'stop' }
+      }
     },
   }
 }
