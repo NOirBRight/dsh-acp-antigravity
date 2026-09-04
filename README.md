@@ -56,9 +56,9 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 
 ## Host composition
 
-installAntigravityProvider() mounts the provider in an external-agent registry and optionally mounts its Settings editor. The package is usable with a host implementing those registry interfaces; the DSH checkout currently lacks the primary external-agent turn-driver and session-event hooks required for in-tree mounting.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC, and the `./client` entry registers a `settings.section` named External Agents (id `external-agents`) the same way other plugins add Settings pages. The card locates the ACP executable pair, validates installation, signs in with personal Google OAuth, and refreshes account-visible models.
 
-The provider does not start a replacement DSH server and does not claim that an out-of-tree registry adapter is a complete DSH integration.
+installAntigravityProvider() remains the library mount for hosts that own their own registry. The current DSH checkout still lacks the primary external-agent turn-driver and session-event hooks, so selecting Antigravity as a primary model is not claimed.
 
 ## Real-binary smoke
 

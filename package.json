@@ -12,25 +12,68 @@
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
     "./settings": { "types": "./dist/settings.d.ts", "default": "./dist/settings.js" },
     "./protocol": { "types": "./dist/protocol.d.ts", "default": "./dist/protocol.js" },
+    "./client": { "types": "./dist/client-contract.d.ts", "default": "./lib/client.js" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "docs/notes", "LICENSE"],
+  "files": ["dist", "lib/client.js", "cordis.patch.yml", "README.md", "docs/notes", "LICENSE"],
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && tsdown",
     "test": "vitest run",
     "check": "pnpm run typecheck && pnpm run test && pnpm run build"
   },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
   "peerDependencies": {
-    "@deepseek-ai/dsh-acp-provider": ">=0.1.0"
+    "@deepseek-ai/dsh-acp-provider": ">=0.1.0",
+    "@deepseek-ai/cordis": ">=4.0.2 <5.0.0",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-client-connection": { "optional": true },
+    "@deepseek-ai/dsh-client-locale": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-renderer": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-settings": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.25.1"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-acp-provider": "file:../dsh-acp-provider",
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-acp-provider": "file:../dsh-acp-provider-settings",
+    "@deepseek-ai/dsh-client-connection": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-locale": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.2-alpha.4",
     "@types/node": "^22.15.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsdown": "^0.22.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

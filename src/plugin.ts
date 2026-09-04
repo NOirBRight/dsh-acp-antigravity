@@ -1,4 +1,4 @@
-import type { ExternalAgentProvider, ExternalAgentProviderRegistry } from '@deepseek-ai/dsh-acp-provider'
+import type { ExternalAgentProviderRegistry } from '@deepseek-ai/dsh-acp-provider'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { AntigravityProvider, type AntigravityProviderDependencies } from './provider.js'
 import { createAntigravitySettingsEditor } from './settings.js'
@@ -11,7 +11,7 @@ export interface AntigravityPluginHost {
 }
 /** Installed provider and its quiescent disposer. */
 export interface InstalledAntigravityProvider {
-  readonly provider: ExternalAgentProvider
+  readonly provider: AntigravityProvider
   readonly dispose: () => Promise<void>
 }
 /** Install one Antigravity provider and its live provider-owned Settings card. */
