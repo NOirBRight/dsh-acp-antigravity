@@ -80,6 +80,9 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       toProviderConfig(next),
       { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => { authorizationUrl = request.authorizationUrl } },
     )
+    if (next.executablePath.trim() !== '' && next.harnessPath.trim() !== '') {
+      try { await installed.provider.validateInstallation() } catch { /* health already records the failure */ }
+    }
   }
 
   const snapshot = async (): Promise<AcpSettingsSnapshot> => {
@@ -99,7 +102,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
       live: editor?.status.live ?? false,
       ready: editor?.status.ready ?? health?.status === 'ready',
-      ...((): { message?: string } => { const message = editor?.status.message ?? health?.message ?? probeMessage; return message === undefined ? {} : { message } })(),
+      ...((): { message?: string } => {
+        const managed = live.executablePath.trim() !== '' && live.harnessPath.trim() !== ''
+        const message = editor?.status.message ?? health?.message ?? (managed ? undefined : probeMessage)
+        return message === undefined ? {} : { message }
+      })(),
       ...(health?.version === undefined ? {} : { version: health.version }),
       ...(health?.profileDirectory === undefined ? {} : { profileDirectory: health.profileDirectory }),
       ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
@@ -145,10 +152,13 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (action === 'probe-installation') {
         const found = await probeAntigravityInstallation()
         probeMessage = found.message
-        if (found.executablePath !== undefined && found.harnessPath !== undefined) {
+        const empty = live.executablePath.trim() === '' || live.harnessPath.trim() === ''
+        if (empty && found.executablePath !== undefined && found.harnessPath !== undefined) {
           const next = { ...live, executablePath: found.executablePath, harnessPath: found.harnessPath }
           await mount(next)
           savePersistedConfig(home, next)
+        } else if (!empty) {
+          try { await installed.provider.validateInstallation() } catch { /* health already records the failure */ }
         }
         return found
       }

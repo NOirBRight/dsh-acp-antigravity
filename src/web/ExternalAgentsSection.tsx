@@ -21,7 +21,7 @@ const cardsStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0, di
 const badge: CSSProperties = { marginLeft: 'auto', fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-tertiary)' }
 const meta: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)', minHeight: 18 }
 const field: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
-const input: CSSProperties = { height: 32, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, padding: '0 10px', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)' }
+const input: CSSProperties = { height: 32, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, padding: '0 10px', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }
 const ghostBtn: CSSProperties = { height: 32, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 24, background: 'transparent', color: 'inherit', fontSize: 13, fontWeight: 500, cursor: 'pointer', padding: '0 12px' }
 
 function cardShell(ready: boolean, missing: boolean): CSSProperties {
@@ -70,12 +70,12 @@ function ProviderCard(props: {
       <div style={meta}>{[row.version, row.message].filter(Boolean).join(' · ')}</div>
       <label style={field}>
         {t('executable')}
-        <input style={input} value={row.executablePath} onChange={event => onChange({ ...row, executablePath: event.target.value })} />
+        <input style={input} title={row.executablePath} value={row.executablePath} onChange={event => onChange({ ...row, executablePath: event.target.value })} />
         <button type='button' style={ghostBtn} onClick={() => onLocate('executablePath')}>{t('locateAcp')}</button>
       </label>
       <label style={field}>
         {t('harness')}
-        <input style={input} value={row.harnessPath} onChange={event => onChange({ ...row, harnessPath: event.target.value })} />
+        <input style={input} title={row.harnessPath} value={row.harnessPath} onChange={event => onChange({ ...row, harnessPath: event.target.value })} />
         <button type='button' style={ghostBtn} onClick={() => onLocate('harnessPath')}>{t('locateHarness')}</button>
       </label>
       <label style={field}>
@@ -112,7 +112,8 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
     setSnapshot(next)
     setDraft(next.rows[0])
     try {
-      await run('probe-installation')
+      if ((next.rows[0]?.executablePath ?? '').trim() === '') await run('probe-installation')
+      else await run('validate-installation')
       next = await load()
       setSnapshot(next)
       setDraft(next.rows[0])
@@ -129,7 +130,13 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   const installPhase = snapshot?.install?.phase
   useEffect(() => {
     if (installPhase !== 'downloading' && installPhase !== 'extracting' && installPhase !== 'verifying') return
-    const timer = window.setInterval(() => { void load().then(next => { setSnapshot(next); setDraft(next.rows[0]) }).catch(() => undefined) }, 500)
+    const timer = window.setInterval(() => {
+      void load().then(next => {
+        setSnapshot(next)
+        setDraft(next.rows[0])
+        if (next.install?.phase === 'succeeded') void run('validate-installation').then(() => load()).then(after => { setSnapshot(after); setDraft(after.rows[0]) }).catch(() => undefined)
+      }).catch(() => undefined)
+    }, 500)
     return () => window.clearInterval(timer)
   }, [installPhase, load])
 

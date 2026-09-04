@@ -32,4 +32,29 @@ describe('DSH settings plugin', () => {
     expect(snapshot?.rows).toHaveLength(1)
     expect(snapshot?.rows[0]).toMatchObject({ title: 'Antigravity', enabled: true, installed: false })
   })
+
+  it('marks a configured executable pair as installed after validation', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-settings-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-acp-bin-'))
+    homes.push(dir)
+    const { writeFile, chmod } = await import('node:fs/promises')
+    const server = join(dir, 'agy_acp_server.par')
+    const harness = join(dir, 'localharness_external')
+    await writeFile(server, '#!/bin/sh\nexit 1\n')
+    await writeFile(harness, '#!/bin/sh\nexit 1\n')
+    await chmod(server, 0o755)
+    await chmod(harness, 0o755)
+    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const ctx = {
+      effect: (fn: () => unknown) => fn(),
+      connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
+    }
+    await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
+    const result = await handlers.get(ACP_SETTINGS_RPC_CHANNEL)!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
+    const snapshot = decodeSnapshot(result.value)
+    expect(snapshot?.rows[0]?.installed).toBe(true)
+    expect(snapshot?.rows[0]?.executablePath).toBe(server)
+  })
 })
