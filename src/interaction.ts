@@ -1,4 +1,4 @@
-import { HostExpiredError, TurnAbortedError, optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
+import { HostExpiredError, TurnAbortedError, UnscopedAllowAlwaysError, optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import { createAntigravityFilesystemHandler } from './filesystem.js'
 import type { AcpRequestHandler } from './protocol.js'
@@ -43,6 +43,7 @@ function parsePermissionRequest(params: unknown, id: string): ExternalAgentPermi
     const label = stringValue(value.name) ?? kind
     const scope: 'session' | 'thread' | undefined = value.scope === 'session' || value.scope === 'thread' ? value.scope : kind === 'allow_always' ? requestScope : undefined
     if (native === undefined) throw new Error('Antigravity permission option has no optionId')
+    if (kind === 'allow_always' && scope === undefined) throw new UnscopedAllowAlwaysError()
     return { optionId: optionId(native), kind, label, ...(scope === undefined ? {} : { scope }) }
   })
   if (options.length === 0) throw new Error('Antigravity permission request has no options')
@@ -110,7 +111,8 @@ function permissionResponse(decision: Awaited<ReturnType<ExternalAgentTurnHost['
   if (selected !== undefined && selected.kind !== 'reject' && selected.kind !== 'cancel') throw new Error('Antigravity host returned an unoffered permission option')
   if (decision.kind === 'reject') {
     const rejection = selected ?? request.options.find(option => option.kind === 'reject' || option.kind === 'cancel')
-    return rejection === undefined ? { outcome: { outcome: 'cancelled' } } : { outcome: { outcome: 'selected', optionId: String(rejection.optionId) } }
+    if (rejection === undefined) throw new Error('Antigravity offered no native reject option')
+    return { outcome: { outcome: 'selected', optionId: String(rejection.optionId) } }
   }
   return selected === undefined ? { outcome: { outcome: 'cancelled' } } : { outcome: { outcome: 'selected', optionId: String(selected.optionId) } }
 }

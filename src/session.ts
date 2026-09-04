@@ -97,7 +97,8 @@ export class AntigravitySession implements ExternalAgentSession {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
-    try { await this.connection.request('session/close', { sessionId: this.nativeId }) } catch { /* Closing an already-ended native session is harmless. */ }
+    const signal = AbortSignal.timeout(this.config.cancelGraceMs ?? 500)
+    try { await this.connection.request('session/close', { sessionId: this.nativeId }, signal) } catch { /* Timeout or an already-ended session must not block transport teardown. */ }
     await this.connection.close()
   }
 }

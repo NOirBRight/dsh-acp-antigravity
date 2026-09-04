@@ -1,9 +1,7 @@
 import {
   ManagedExternalAgentSession,
-  authorizeExternalAgentOpen,
   providerId,
   type ExternalAgentFilesystem,
-  type ExternalAgentFullAccessAudit,
   type ExternalAgentModel,
   type ExternalAgentOpenRequest,
   type ExternalAgentProvider,
@@ -26,11 +24,6 @@ import {
   type AntigravityProviderConfig,
 } from './types.js'
 
-/** Value-free audit record required before a full-access process starts. */
-export interface AntigravityFullAccessAudit extends ExternalAgentFullAccessAudit {
-  readonly instanceId: string
-}
-
 /** Dependencies that keep process, filesystem and audit seams injectable. */
 export interface AntigravityProviderDependencies {
   readonly cwd?: string
@@ -38,7 +31,6 @@ export interface AntigravityProviderDependencies {
   readonly installationProbe?: AntigravityInstallationProbe
   readonly launchSpec?: (config: AntigravityProviderConfig, cwd: string) => Promise<AntigravityLaunchSpec>
   readonly connectionFactory?: (spec: AntigravityLaunchSpec, options?: StdioAcpOptions) => AcpConnection
-  readonly auditFullAccess?: (entry: AntigravityFullAccessAudit) => void | Promise<void>
   readonly onAuthorizationUrl?: (request: AntigravityAuthorizationRequest) => void
 }
 
@@ -89,8 +81,6 @@ export class AntigravityProvider implements ExternalAgentProvider {
     this.assertActive()
     if (request.route.kind !== 'external-agent' || request.route.provider !== this.info.id) throw new Error('Antigravity received a route for another provider')
     if (request.signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
-    const audit = this.dependencies.auditFullAccess
-    await authorizeExternalAgentOpen(request, audit === undefined ? undefined : entry => audit({ ...entry, instanceId: this.config.instanceId }))
     const cwd = this.workingDirectory(request.workspaceRoot)
     const filesystem = request.clientFilesystem === undefined ? this.dependencies.filesystem : adaptFilesystem(request.clientFilesystem)
     let connection: AcpConnection | undefined
@@ -222,16 +212,13 @@ export class AntigravityProvider implements ExternalAgentProvider {
 
   private async startConnection(cwd: string, signal?: AbortSignal, filesystem = false): Promise<AcpConnection> {
     const spec = this.dependencies.launchSpec === undefined ? await buildAntigravityLaunchSpec(this.config, cwd) : await this.dependencies.launchSpec(this.config, cwd)
+    this.assertActive()
     const options = {
       ...(this.config.maxEventPayloadBytes === undefined ? {} : { maxLineBytes: this.config.maxEventPayloadBytes }),
       ...(this.config.cancelGraceMs === undefined ? {} : { cancelGraceMs: this.config.cancelGraceMs }),
       ...(this.dependencies.onAuthorizationUrl === undefined ? {} : { onAuthorizationUrl: this.dependencies.onAuthorizationUrl }),
     }
     const connection = this.dependencies.connectionFactory === undefined ? spawnAntigravityAcp(spec, options) : this.dependencies.connectionFactory(spec, options)
-    if (this.disposed) {
-      await connection.close()
-      throw new Error('Antigravity provider is disposed')
-    }
     this.connections.add(connection)
     try {
       const response = await connection.request('initialize', {
@@ -260,8 +247,10 @@ export class AntigravityProvider implements ExternalAgentProvider {
   }
 
   private async openNativeSession(connection: AcpConnection, request: ExternalAgentOpenRequest, cwd: string, filesystem?: AntigravityClientFilesystem): Promise<unknown> {
-    const attachmentRoots = request.attachmentRoots ?? filesystem?.attachmentRoots
-    const params = { cwd, mcpServers: [], ...(attachmentRoots === undefined ? {} : { additionalDirectories: [...attachmentRoots] }) }
+    const attachmentRoots = request.attachmentRoots ?? filesystem?.attachmentRoots ?? []
+    const workspaceRoots = filesystem?.workspaceRoots ?? (filesystem === undefined ? [] : [filesystem.workspaceRoot])
+    const additionalDirectories = [...new Set([...workspaceRoots, ...attachmentRoots])].filter(root => root !== cwd)
+    const params = { cwd, mcpServers: [], ...(additionalDirectories.length === 0 ? {} : { additionalDirectories }) }
     if (request.resumeCursor !== undefined) {
       if (request.resumeCursor.provider !== this.info.id) throw new Error('Antigravity resume cursor belongs to another provider')
       if (this.identity?.resumeMethod === 'resume') return connection.request('session/resume', { ...params, sessionId: request.resumeCursor.value }, request.signal)

@@ -28,6 +28,7 @@ interface FakeConnectionOptions {
   readonly promptResponse?: unknown
   readonly updateSessionId?: string
   readonly agentRequests?: readonly { readonly method: string; readonly params: unknown }[]
+  readonly hangClose?: boolean
 }
 
 class FakeConnection implements AcpConnection {
@@ -38,7 +39,7 @@ class FakeConnection implements AcpConnection {
 
   constructor(private readonly options: FakeConnectionOptions = {}) {}
 
-  async request(method: string, params?: unknown): Promise<unknown> {
+  async request(method: string, params?: unknown, signal?: AbortSignal): Promise<unknown> {
     this.calls.push({ method, params })
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionCapabilities: { resume: {} } } }
     if (method === 'authenticate') {
@@ -48,6 +49,7 @@ class FakeConnection implements AcpConnection {
     if (method === 'session/new') return { sessionId: 'native-1', configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
     if (method === 'session/resume' || method === 'session/load') return { configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
     if (method === 'session/set_config_option' || method === 'session/set_mode') return {}
+    if (method === 'session/close' && this.options.hangClose === true) return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
     if (method === 'session/prompt') {
       const updates = this.options.updates ?? [
         { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } },
@@ -130,6 +132,13 @@ describe('Antigravity mapping and safety', () => {
     await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Once' }] }, 1)).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
+  it('rejects unscoped allow-always and host rejection without a native option', async () => {
+    const unscoped = createAntigravityInteractionHandler(host())
+    await expect(unscoped('interaction/permission', { toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always' }] }, 1)).rejects.toThrow(/session or thread scope/)
+    const rejected = createAntigravityInteractionHandler({ ...host(), requestPermission: async () => ({ kind: 'reject' }) })
+    await expect(rejected('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Once' }] }, 1)).rejects.toThrow(/no native reject option/)
+  })
+
   it('keeps OAuth links safe and redacts credential-looking diagnostics', () => {
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=state123&redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2F'
     expect(parseAntigravityAuthorizationUrl(url).redirectUri).toBe('http://127.0.0.1:8765/')
@@ -192,10 +201,10 @@ describe('Antigravity provider lifecycle', () => {
 
   it('resumes with the persisted native ID and complete additional roots', async () => {
     const connection = new FakeConnection()
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: { ...clientFilesystem(), workspaceRoots: ['/workspace', '/shared'] }, launchSpec: async () => launchSpec(), connectionFactory: () => connection })
     const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: resumeCursor('antigravity', 'native-old'), attachmentRoots: ['/attachments'], permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(session.ref.nativeSession).toBe('native-old')
-    expect(connection.calls.find(call => call.method === 'session/resume')?.params).toMatchObject({ sessionId: 'native-old', cwd: '/workspace', additionalDirectories: ['/attachments'] })
+    expect(connection.calls.find(call => call.method === 'session/resume')?.params).toMatchObject({ sessionId: 'native-old', cwd: '/workspace', additionalDirectories: ['/shared', '/attachments'] })
     await session.dispose()
   })
 
@@ -285,6 +294,29 @@ describe('Antigravity provider lifecycle', () => {
     expect(editor.snapshot().status).toMatchObject({ authenticated: true, live: false, ready: true })
   })
 
+  it('bounds a hanging native session close and still closes transport', async () => {
+    const connection = new FakeConnection({ hangClose: true })
+    const provider = new AntigravityProvider({ ...config(), cancelGraceMs: 5 }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('hanging-close'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.dispose()).resolves.toBeUndefined()
+    expect(connection.isClosed).toBe(true)
+  })
+
+  it('does not create a connection when disposal wins launch preparation', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const preparing = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let opened = 0
+    const provider = new AntigravityProvider(config(), { launchSpec: async () => { entered(); await gate; return launchSpec() }, connectionFactory: () => { opened += 1; return new FakeConnection() } })
+    const listing = provider.listModels()
+    await preparing
+    await provider.dispose()
+    release()
+    await expect(listing).rejects.toThrow(/disposed/)
+    expect(opened).toBe(0)
+  })
+
   it('does not leave a provider registered when Settings registration fails', () => {
     const providers = new ExternalAgentProviderRegistry()
     const editors = new ExternalAgentSettingsEditorRegistry()
@@ -304,12 +336,15 @@ describe('Antigravity provider lifecycle', () => {
   it('requires explicit full-access confirmation and audits before startup', async () => {
     const audit: string[] = []
     let opened = 0
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { opened++; return new FakeConnection() }, auditFullAccess: entry => { audit.push(entry.mode) } })
-    await expect(provider.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', signal: new AbortController().signal })).rejects.toThrow(/confirmation/)
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { opened++; return new FakeConnection() } })
+    const registry = new ExternalAgentProviderRegistry({ auditFullAccess: entry => { audit.push(entry.mode) } })
+    registry.register(provider)
+    await expect(registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', signal: new AbortController().signal })).rejects.toThrow(/confirmation/)
     expect(opened).toBe(0)
-    await provider.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: 'audit-1', signal: new AbortController().signal })
+    const session = await registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: 'audit-1', signal: new AbortController().signal })
     expect(audit).toEqual(['full-access'])
-    expect(opened).toBe(1)
+    expect(opened).toBe(2)
+    await session.dispose()
   })
 })
 

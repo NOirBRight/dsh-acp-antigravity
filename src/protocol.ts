@@ -94,6 +94,7 @@ class SdkAcpConnection implements AcpConnection {
   private requestHandler: AcpRequestHandler | undefined
   private notificationHandler: AcpNotificationHandler | undefined
   private closed = false
+  private termination: Promise<void> | undefined
   private readonly sdk: ClientSideConnection
   private readonly child: ChildProcessWithoutNullStreams
   private readonly guard: LineBoundTransform
@@ -135,11 +136,12 @@ class SdkAcpConnection implements AcpConnection {
   setNotificationHandler(handler: AcpNotificationHandler | undefined): void { this.notificationHandler = handler }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    if (this.termination !== undefined) return this.termination
     this.closed = true
     this.guard.destroy()
     this.child.stdin.destroy()
-    await terminateProcess(this.child, this.cancelGraceMs)
+    this.termination = terminateProcess(this.child, this.cancelGraceMs)
+    await this.termination
   }
 
   fail(error: unknown): void {
@@ -147,7 +149,7 @@ class SdkAcpConnection implements AcpConnection {
     this.closed = true
     this.guard.destroy(error instanceof Error ? error : new Error('ACP transport failed'))
     this.child.stdin.destroy()
-    void terminateProcess(this.child, this.cancelGraceMs)
+    this.termination = terminateProcess(this.child, this.cancelGraceMs)
   }
 
   private escalateCancellation(method: string, params: unknown): () => void {
