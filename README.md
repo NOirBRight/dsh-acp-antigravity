@@ -26,6 +26,7 @@ const provider = new AntigravityProvider({
   harnessPath: '/opt/antigravity/localharness_external',
   stateDirectory: '/var/lib/dsh/antigravity',
   instanceId: 'default',
+  cancelGraceMs: 500,
 })
 const registry = new ExternalAgentProviderRegistry()
 const unregister = registry.register(provider)
@@ -33,7 +34,7 @@ const models = await provider.listModels()
 await unregister()
 ```
 
-Installation paths are explicit. On Linux the launch uses the provider-required --uid= argument; Windows accepts drive-letter and UNC working directories.
+Installation paths are explicit. On Linux the launch uses the provider-required --uid= argument; Windows accepts drive-letter and UNC working directories. cancelGraceMs controls the validated delay between native cancellation and process termination.
 
 ## Authentication and Settings
 

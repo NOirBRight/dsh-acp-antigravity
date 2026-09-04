@@ -42,6 +42,7 @@ export interface AcpConnection {
 /** Options for the official SDK stdio transport. */
 export interface StdioAcpOptions {
   readonly maxLineBytes?: number
+  readonly cancelGraceMs?: number
   readonly onStderr?: (text: string) => void
   readonly onAuthorizationUrl?: (request: AntigravityAuthorizationRequest) => void
 }
@@ -49,7 +50,9 @@ export interface StdioAcpOptions {
 /** Start the configured executable with the official ACP TypeScript SDK. */
 export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioAcpOptions = {}): AcpConnection {
   const maxLineBytes = options.maxLineBytes ?? 16 * 1024 * 1024
+  const cancelGraceMs = options.cancelGraceMs ?? 500
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) throw new RangeError('maxLineBytes must be a positive safe integer')
+  if (!Number.isSafeInteger(cancelGraceMs) || cancelGraceMs < 1) throw new RangeError('cancelGraceMs must be a positive safe integer')
   const child = spawn(spec.command, [...spec.args], {
     cwd: spec.cwd,
     env: spec.env,
@@ -79,7 +82,7 @@ export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioA
     options.onStderr?.(redactAntigravityText(raw))
     emitAuthorization(raw, false)
   })
-  const connection = new SdkAcpConnection(child, guard)
+  const connection = new SdkAcpConnection(child, guard, cancelGraceMs)
   guard.once('error', error => connection.fail(error))
   child.once('error', error => connection.fail(error))
   child.once('exit', (code, signal) => connection.fail(new Error('Antigravity ACP process exited (' + String(code ?? signal ?? 'unknown') + ')')))
@@ -95,7 +98,7 @@ class SdkAcpConnection implements AcpConnection {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly guard: LineBoundTransform
 
-  constructor(child: ChildProcessWithoutNullStreams, guard: LineBoundTransform) {
+  constructor(child: ChildProcessWithoutNullStreams, guard: LineBoundTransform, private readonly cancelGraceMs: number) {
     this.child = child
     this.guard = guard
     const client: Client = {
@@ -136,7 +139,7 @@ class SdkAcpConnection implements AcpConnection {
     this.closed = true
     this.guard.destroy()
     this.child.stdin.destroy()
-    await terminateProcess(this.child)
+    await terminateProcess(this.child, this.cancelGraceMs)
   }
 
   fail(error: unknown): void {
@@ -144,12 +147,12 @@ class SdkAcpConnection implements AcpConnection {
     this.closed = true
     this.guard.destroy(error instanceof Error ? error : new Error('ACP transport failed'))
     this.child.stdin.destroy()
-    void terminateProcess(this.child)
+    void terminateProcess(this.child, this.cancelGraceMs)
   }
 
   private escalateCancellation(method: string, params: unknown): () => void {
     if (method === 'session/prompt' && isRecord(params) && typeof params.sessionId === 'string') this.notify('session/cancel', { sessionId: params.sessionId })
-    const timer = setTimeout(() => { if (!this.closed) void this.close() }, 500)
+    const timer = setTimeout(() => { if (!this.closed) void this.close() }, this.cancelGraceMs)
     timer.unref?.()
     return () => clearTimeout(timer)
   }
@@ -203,14 +206,14 @@ class LineBoundTransform extends Transform {
   }
 }
 
-async function terminateProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+async function terminateProcess(child: ChildProcessWithoutNullStreams, graceMs: number): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
   const pid = child.pid
   try { if (pid !== undefined && process.platform !== 'win32') process.kill(-pid, 'SIGTERM'); else child.kill('SIGTERM') } catch { /* The child exited between the state check and signal. */ }
-  await waitForExit(child, 500)
+  await waitForExit(child, graceMs)
   if (child.exitCode === null && child.signalCode === null) {
     try { if (pid !== undefined && process.platform !== 'win32') process.kill(-pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* The child exited during graceful teardown. */ }
-    await waitForExit(child, 500)
+    await waitForExit(child, graceMs)
   }
 }
 

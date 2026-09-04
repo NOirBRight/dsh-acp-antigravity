@@ -16,11 +16,11 @@ export function toAntigravitySettings(config: AntigravityProviderConfig): Antigr
   return { instanceId: config.instanceId, executablePath: config.executablePath, harnessPath: config.harnessPath, stateDirectory: config.stateDirectory, authMethod: config.authMethod ?? 'oauth-personal' }
 }
 /** Convert provider health into the generic Settings status without claiming readiness from liveness. */
-function settingsStatus(health: AntigravityHealth): ExternalAgentSettingsStatus {
+function settingsStatus(health: AntigravityHealth, live: boolean): ExternalAgentSettingsStatus {
   const installed = health.status !== 'missing-installation' && health.status !== 'invalid-installation'
   const authenticated = health.status === 'ready'
   const ready = health.status === 'ready'
-  return { installed, authenticated, live: ready, ready, ...(health.message === undefined ? {} : { message: health.message }) }
+  return { installed, authenticated, live, ready, ...(health.message === undefined ? {} : { message: health.message }) }
 }
 /** Build a live provider-owned Settings card with validation and OAuth actions. */
 export function createAntigravitySettingsEditor(config: AntigravityProviderConfig, provider: AntigravityProvider): ExternalAgentSettingsEditor {
@@ -43,7 +43,7 @@ export function createAntigravitySettingsEditor(config: AntigravityProviderConfi
         provider: id,
         instanceId: config.instanceId,
         title: config.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + config.instanceId + ')',
-        status: settingsStatus(health),
+        status: settingsStatus(health, provider.live),
         fields,
         actions: [
           { id: 'validate-installation', label: 'Validate installation', run: async () => provider.validateInstallation() },

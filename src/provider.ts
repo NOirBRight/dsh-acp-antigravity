@@ -6,10 +6,10 @@ import {
   sessionId,
   type ExternalAgentAttachment,
   type ExternalAgentFilesystem,
+  type ExternalAgentFullAccessAudit,
   type ExternalAgentModel,
   type ExternalAgentOpenRequest,
   type ExternalAgentProvider,
-  type ExternalAgentProviderId,
   type ExternalAgentSession,
   type ExternalAgentSessionRef,
   type ExternalAgentSessionId,
@@ -35,12 +35,8 @@ import {
 } from './types.js'
 
 /** Value-free audit record required before a full-access process starts. */
-export interface AntigravityFullAccessAudit {
-  readonly provider: ExternalAgentProviderId
+export interface AntigravityFullAccessAudit extends ExternalAgentFullAccessAudit {
   readonly instanceId: string
-  readonly session: ExternalAgentSessionId
-  readonly auditId?: string
-  readonly mode: 'full-access'
 }
 
 /** Dependencies that keep process, filesystem and audit seams injectable. */
@@ -72,6 +68,8 @@ export class AntigravityProvider implements ExternalAgentProvider {
 
   /** Value-free installation and protocol health for Settings. */
   get health(): AntigravityHealth { return this.status }
+  /** Whether this provider currently owns an ACP connection or session. */
+  get live(): boolean { return this.connections.size > 0 || this.sessions.size > 0 }
 
   /** Discover account-visible models through ACP session configuration. */
   async listModels(signal?: AbortSignal): Promise<readonly ExternalAgentModel[]> {
@@ -86,7 +84,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       this.status = { status: 'ready', profileDirectory: this.config.stateDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: this.config.model ?? ANTIGRAVITY_DEFAULT_MODEL }
       return models
     } catch (error) {
-      this.status = { status: isAuthenticationError(error) ? 'authentication-required' : 'error', profileDirectory: this.config.stateDirectory, message: isAuthenticationError(error) ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
+      this.setFailureStatus(error)
       throw error
     } finally {
       if (connection !== undefined) this.connections.delete(connection)
@@ -99,7 +97,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     this.assertActive()
     if (request.route.kind !== 'external-agent' || request.route.provider !== this.info.id) throw new Error('Antigravity received a route for another provider')
     if (request.signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
-    const audit = this.dependencies.auditFullAccess === undefined ? undefined : (entry: Parameters<NonNullable<AntigravityProviderDependencies['auditFullAccess']>>[0]) => this.dependencies.auditFullAccess?.(entry)
+    const audit = this.dependencies.auditFullAccess
     await authorizeExternalAgentOpen(request, audit === undefined ? undefined : entry => audit({ ...entry, instanceId: this.config.instanceId }))
     const cwd = this.workingDirectory(request.workspaceRoot)
     let connection: AcpConnection | undefined
@@ -128,7 +126,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     } catch (error) {
       if (connection !== undefined) this.connections.delete(connection)
       await connection?.close()
-      this.status = { status: isAuthenticationError(error) ? 'authentication-required' : 'error', profileDirectory: this.config.stateDirectory, message: isAuthenticationError(error) ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
+      this.setFailureStatus(error)
       throw error
     }
   }
@@ -144,6 +142,11 @@ export class AntigravityProvider implements ExternalAgentProvider {
       this.connections.clear()
     })()
     return this.disposePromise
+  }
+
+  private setFailureStatus(error: unknown): void {
+    const authenticationRequired = isAuthenticationError(error)
+    this.status = { status: authenticationRequired ? 'authentication-required' : 'error', profileDirectory: this.config.stateDirectory, message: authenticationRequired ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
   }
 
   private assertActive(): void {
@@ -178,6 +181,10 @@ export class AntigravityProvider implements ExternalAgentProvider {
     try {
       if (!await this.authenticateIfConfigured(connection, signal)) throw new Error('Antigravity ACP does not expose personal OAuth authentication')
       if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
+      this.status = { status: 'ready', profileDirectory: this.config.stateDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), ...(this.status.model === undefined ? {} : { model: this.status.model }) }
+    } catch (error) {
+      this.setFailureStatus(error)
+      throw error
     } finally {
       this.connections.delete(connection)
       await connection.close()
@@ -224,6 +231,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     const spec = this.dependencies.launchSpec === undefined ? await buildAntigravityLaunchSpec(this.config, cwd) : await this.dependencies.launchSpec(this.config, cwd)
     const options = {
       ...(this.config.maxEventPayloadBytes === undefined ? {} : { maxLineBytes: this.config.maxEventPayloadBytes }),
+      ...(this.config.cancelGraceMs === undefined ? {} : { cancelGraceMs: this.config.cancelGraceMs }),
       ...(this.dependencies.onAuthorizationUrl === undefined ? {} : { onAuthorizationUrl: this.dependencies.onAuthorizationUrl }),
     }
     const connection = this.dependencies.connectionFactory === undefined ? spawnAntigravityAcp(spec, options) : this.dependencies.connectionFactory(spec, options)
@@ -321,8 +329,9 @@ export class AntigravitySession implements ExternalAgentSession {
     }
     request.signal.addEventListener('abort', onAbort, { once: true })
     try {
+      const prompt = await promptBlocks(request.prompt, request.attachments, this.filesystem)
       await this.connection.request('session/set_mode', { sessionId: this.nativeId, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
-      const response = await this.connection.request('session/prompt', { sessionId: this.nativeId, prompt: promptBlocks(request.prompt, request.attachments) }, request.signal)
+      const response = await this.connection.request('session/prompt', { sessionId: this.nativeId, prompt }, request.signal)
       await events
       if (protocolFailure !== undefined) throw protocolFailure
       await publishUsage(response, host)
@@ -364,11 +373,16 @@ function nativeSessionId(response: unknown): string {
   if (!isRecord(response) || typeof response.sessionId !== 'string' || response.sessionId.length === 0) throw new Error('Antigravity session response has no session id')
   return response.sessionId
 }
-function promptBlocks(prompt: string, attachments?: readonly ExternalAgentAttachment[]): readonly Record<string, string>[] {
+async function promptBlocks(prompt: string, attachments: readonly ExternalAgentAttachment[] | undefined, filesystem: AntigravityClientFilesystem | undefined): Promise<readonly Record<string, string>[]> {
   const blocks: Record<string, string>[] = [{ type: 'text', text: prompt }]
   for (const attachment of attachments ?? []) {
     if (attachment.path !== undefined && attachment.data !== undefined) throw new Error('Antigravity attachment cannot contain both path and data')
-    if (attachment.path !== undefined) { blocks.push({ type: 'resource_link', name: attachment.name, uri: attachment.path, ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }) }); continue }
+    if (attachment.path !== undefined) {
+      if (filesystem?.resolvePath === undefined) throw new Error('Antigravity path attachments require the DSH filesystem resolver')
+      const path = await filesystem.resolvePath(attachment.path, 'read')
+      blocks.push({ type: 'resource_link', name: attachment.name, uri: path, ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }) })
+      continue
+    }
     if (attachment.data !== undefined && attachment.mimeType?.startsWith('image/') === true) { blocks.push({ type: 'image', data: attachment.data, mimeType: attachment.mimeType }); continue }
     if (attachment.data !== undefined) { blocks.push({ type: 'text', text: attachment.data }); continue }
     throw new Error('Antigravity attachment has no path or data: ' + attachment.name)

@@ -7,6 +7,7 @@ import {
   AntigravityProvider,
   buildAntigravityEnvironment,
   createAntigravityFilesystemHandler,
+  createAntigravityInteractionHandler,
   createAntigravitySettingsEditor,
   mapPermissionMode,
   parseAntigravityAuthPrelude,
@@ -68,6 +69,13 @@ function config() {
   return { executablePath: '/opt/agy/agy_acp_server', harnessPath: '/opt/agy/localharness_external', stateDirectory: '/tmp/dsh-test', instanceId: 'default', platform: 'linux' as const }
 }
 function route(model = 'gemini-pro') { return createSessionModelRoute('external-agent', 'antigravity', model) }
+function clientFilesystem() {
+  return {
+    workspaceRoot: '/workspace', workspaceRoots: ['/workspace'], attachmentRoots: ['/attachments'],
+    readTextFile: async () => '', writeTextFile: async () => undefined,
+    resolvePath: async (path: string) => { if (!path.startsWith('/workspace/') && !path.startsWith('/attachments/')) throw new Error('outside configured roots'); return path },
+  }
+}
 function launchSpec(): AntigravityLaunchSpec { return { command: '/opt/agy/agy_acp_server', args: ['--uid='], cwd: '/workspace', env: {}, shell: false, extendEnv: false } }
 function host(events: string[] = []): ExternalAgentTurnHost {
   return {
@@ -96,6 +104,18 @@ describe('Antigravity mapping and safety', () => {
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'Other Agent' } })).toThrow(/not antigravity-acp/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 2, agentInfo: { name: 'antigravity-acp' } })).toThrow(/version/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' } })).toThrow(/capabilities/)
+    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: {}, sessionCapabilities: { resume: false } }).supportsResume).toBe(false)
+  })
+
+  it('derives allow-always scope from the native session request', async () => {
+    let scope: unknown
+    const handler = createAntigravityInteractionHandler({
+      publish: () => undefined,
+      requestPermission: async request => { scope = request.options[0]?.scope; return { kind: 'allowed-for-session', optionId: request.options[0]!.optionId } },
+      requestUserInput: async () => ({ answers: [] }),
+    })
+    await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always' }] }, 1)).resolves.toMatchObject({ outcome: { optionId: 'always' } })
+    expect(scope).toBe('session')
   })
 
   it('keeps OAuth links safe and redacts credential-looking diagnostics', () => {
@@ -123,18 +143,29 @@ describe('Antigravity mapping and safety', () => {
 describe('Antigravity provider lifecycle', () => {
   it('discovers exact models and drives a native turn without duplicating tools', async () => {
     const connections: FakeConnection[] = []
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { const connection = new FakeConnection(); connections.push(connection); return connection } })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => { const connection = new FakeConnection(); connections.push(connection); return connection } })
     await expect(provider.listModels()).resolves.toEqual([{ id: 'default', name: 'Account default', supportedModes: ['approval-required', 'auto-accept-edits', 'full-access'] }, { id: 'gemini-pro', name: 'Gemini Pro', supportedModes: ['approval-required', 'auto-accept-edits', 'full-access'] }])
     const session = await provider.openSession({ route: route(), session: sessionId('dsh-session'), permissionMode: 'approval-required', signal: new AbortController().signal })
     const events: string[] = []
     const result = await session.runTurn({ turn: turnId('turn'), prompt: 'read', attachments: [{ name: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }, { name: 'source', path: '/workspace/src/a.ts' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host(events))
     expect(result).toMatchObject({ status: 'completed', text: 'hello' })
+    expect(provider.live).toBe(true)
     expect(events).toEqual(['assistant-delta', 'tool-activity', 'usage', 'turn-result'])
     const prompt = connections[1]?.calls.find(call => call.method === 'session/prompt')
     expect(prompt?.params).toMatchObject({ prompt: [{ type: 'text', text: 'read' }, { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }, { type: 'resource_link', name: 'source', uri: '/workspace/src/a.ts' }] })
     expect(connections[1]?.calls.map(call => call.method)).toEqual(['initialize', 'authenticate', 'session/new', 'session/set_config_option', 'session/set_mode', 'session/set_mode', 'session/prompt'])
     await session.dispose()
+    expect(provider.live).toBe(false)
     expect(connections[1]?.isClosed).toBe(true)
+  })
+
+  it('rejects path attachments outside DSH filesystem roots before prompting', async () => {
+    const connection = new FakeConnection()
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('attachment'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('attachment-turn'), prompt: 'read', attachments: [{ name: 'secret', path: '/private/secret' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', error: 'outside configured roots' })
+    expect(connection.calls.some(call => call.method === 'session/prompt')).toBe(false)
+    await session.dispose()
   })
 
   it('uses the requested workspace root as the native session cwd', async () => {
@@ -184,9 +215,13 @@ describe('Antigravity provider lifecycle', () => {
       connectionFactory: () => new FakeConnection(),
     })
     await expect(provider.validateInstallation()).resolves.toMatchObject({ version: '1.2.3' })
-    const fields = createAntigravitySettingsEditor(config(), provider).snapshot().fields
+    const editor = createAntigravitySettingsEditor(config(), provider)
+    const fields = editor.snapshot().fields
     expect(fields.find(field => field.key === 'version')?.value).toBe('1.2.3')
     expect(fields.find(field => field.key === 'fullAccessWarning')?.value).toContain('outside DSH client-filesystem roots')
+    expect(editor.snapshot().status).toMatchObject({ authenticated: false, live: false, ready: false })
+    await provider.signIn()
+    expect(editor.snapshot().status).toMatchObject({ authenticated: true, live: false, ready: true })
   })
 
   it('rejects new work after provider disposal', async () => {
@@ -222,6 +257,10 @@ describe('Antigravity client filesystem', () => {
 })
 
 describe('Antigravity official ACP transport', () => {
+  it('rejects an invalid cancellation grace period before spawning', () => {
+    expect(() => spawnAntigravityAcp(launchSpec(), { cancelGraceMs: 0 })).toThrow(/cancelGraceMs/)
+  })
+
   it('round-trips SDK requests, agent callbacks, notifications, redaction, and teardown', async () => {
     const script = [
       "import readline from 'node:readline'",

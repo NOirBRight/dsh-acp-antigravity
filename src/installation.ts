@@ -67,7 +67,7 @@ export async function buildAntigravityLaunchSpec(config: AntigravityProviderConf
   await prepareAntigravityProfile(config)
   return {
     command: installation.executablePath,
-    args: config.platform === 'linux' ? ['--uid='] : [],
+    args: (config.platform ?? process.platform) === 'linux' ? ['--uid='] : [],
     cwd,
     env: buildAntigravityEnvironment({ ...(baseEnv === undefined ? {} : { baseEnv }), profileDirectory, harnessPath: installation.harnessPath }),
     shell: false,

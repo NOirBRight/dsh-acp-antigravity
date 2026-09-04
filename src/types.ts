@@ -46,6 +46,7 @@ export interface AntigravityProviderConfig extends AntigravityInstallationConfig
   readonly clientVersion?: string
   readonly maxEventTextBytes?: number
   readonly maxEventPayloadBytes?: number
+  readonly cancelGraceMs?: number
 }
 
 /** Result of validating the explicit executable pair. */

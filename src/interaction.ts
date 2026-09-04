@@ -27,12 +27,13 @@ function parsePermissionRequest(params: unknown, id: string): ExternalAgentPermi
   const toolCall = isRecord(params.toolCall) ? params.toolCall : {}
   const toolName = stringValue(toolCall.title) ?? stringValue(toolCall.name) ?? stringValue(toolCall.kind) ?? 'native tool'
   const reason = stringValue(toolCall.rawInput) ?? stringValue(toolCall.input) ?? 'Antigravity requested permission for a native action.'
+  const requestScope: 'session' | 'thread' | undefined = stringValue(params.threadId) === undefined ? stringValue(params.sessionId) === undefined ? undefined : 'session' : 'thread'
   const options = params.options.map(value => {
     if (!isRecord(value)) throw new Error('Antigravity permission option is malformed')
     const native = stringValue(value.optionId)
     const kind = permissionKind(value.kind)
     const label = stringValue(value.name) ?? kind
-    const scope: 'session' | 'thread' | undefined = value.scope === 'session' || value.scope === 'thread' ? value.scope : undefined
+    const scope: 'session' | 'thread' | undefined = value.scope === 'session' || value.scope === 'thread' ? value.scope : kind === 'allow_always' ? requestScope : undefined
     if (native === undefined) throw new Error('Antigravity permission option has no optionId')
     return { optionId: optionId(native), kind, label, ...(scope === undefined ? {} : { scope }) }
   })

@@ -70,7 +70,7 @@ export function validateAntigravityIdentity(response: unknown): AntigravityIdent
   if (!isRecord(response.agentCapabilities)) throw new Error('Antigravity ACP capabilities are missing')
   const capabilities = response.agentCapabilities
   const sessionCapabilities = isRecord(response.sessionCapabilities) ? response.sessionCapabilities : {}
-  const resumeMethod: 'resume' | 'load' | undefined = sessionCapabilities.resume !== undefined && sessionCapabilities.resume !== null || capabilities.sessionResume === true || capabilities.resumeSession === true ? 'resume' : capabilities.loadSession === true ? 'load' : undefined
+  const resumeMethod: 'resume' | 'load' | undefined = sessionCapabilities.resume === true || isRecord(sessionCapabilities.resume) || capabilities.sessionResume === true || capabilities.resumeSession === true ? 'resume' : capabilities.loadSession === true ? 'load' : undefined
   const supportsResume = resumeMethod !== undefined
   return {
     protocolVersion: 1,
