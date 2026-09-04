@@ -17,7 +17,7 @@ import { mapPermissionMode, parseAntigravityModels, resolveAntigravityModel, val
 import { spawnAntigravityAcp, type AcpConnection, type StdioAcpOptions } from './protocol.js'
 import { AntigravitySession } from './session.js'
 import {
-  ANTIGRAVITY_CLIENT_CAPABILITIES,
+  antigravityClientCapabilities,
   ANTIGRAVITY_DEFAULT_MODEL,
   type AntigravityAuthorizationRequest,
   type AntigravityClientFilesystem,
@@ -92,14 +92,14 @@ export class AntigravityProvider implements ExternalAgentProvider {
     const audit = this.dependencies.auditFullAccess
     await authorizeExternalAgentOpen(request, audit === undefined ? undefined : entry => audit({ ...entry, instanceId: this.config.instanceId }))
     const cwd = this.workingDirectory(request.workspaceRoot)
+    const filesystem = request.clientFilesystem === undefined ? this.dependencies.filesystem : adaptFilesystem(request.clientFilesystem)
     let connection: AcpConnection | undefined
     try {
-      connection = await this.openConnection(cwd, request.signal)
-      const filesystem = request.clientFilesystem === undefined ? this.dependencies.filesystem : adaptFilesystem(request.clientFilesystem)
+      connection = await this.openConnection(cwd, request.signal, filesystem !== undefined)
       const response = await this.openNativeSession(connection, request, cwd, filesystem)
       const models = modelsFromSessionResponse(response)
       const selectedModel = resolveAntigravityModel(String(request.route.model), models)
-      const native = nativeSessionId(response)
+      const native = request.resumeCursor?.value ?? nativeSessionId(response)
       if (String(selectedModel.id) !== ANTIGRAVITY_DEFAULT_MODEL) await connection.request('session/set_config_option', { sessionId: native, configId: 'model', value: String(selectedModel.id) }, request.signal)
       await connection.request('session/set_mode', { sessionId: native, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
       const rawSession = new AntigravitySession(connection, this.info.id, request.session, native, this.config, filesystem)
@@ -147,6 +147,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
 
   /** Validate the executable pair and negotiate ACP identity for Settings. */
   async validateInstallation(): Promise<Awaited<ReturnType<typeof validateAntigravityInstallation>>> {
+    this.assertActive()
     const result = await validateAntigravityInstallation(this.config, this.dependencies.installationProbe)
     if ('status' in result) {
       this.status = { status: result.status, profileDirectory: this.config.stateDirectory, message: result.message }
@@ -207,8 +208,8 @@ export class AntigravityProvider implements ExternalAgentProvider {
     return cwd
   }
 
-  private async openConnection(cwd: string, signal?: AbortSignal): Promise<AcpConnection> {
-    const connection = await this.startConnection(cwd, signal)
+  private async openConnection(cwd: string, signal?: AbortSignal, filesystem = false): Promise<AcpConnection> {
+    const connection = await this.startConnection(cwd, signal, filesystem)
     try {
       if (!await this.authenticateIfConfigured(connection, signal)) throw new Error(antigravitySignInRequiredMessage())
       return connection
@@ -219,7 +220,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     }
   }
 
-  private async startConnection(cwd: string, signal?: AbortSignal): Promise<AcpConnection> {
+  private async startConnection(cwd: string, signal?: AbortSignal, filesystem = false): Promise<AcpConnection> {
     const spec = this.dependencies.launchSpec === undefined ? await buildAntigravityLaunchSpec(this.config, cwd) : await this.dependencies.launchSpec(this.config, cwd)
     const options = {
       ...(this.config.maxEventPayloadBytes === undefined ? {} : { maxLineBytes: this.config.maxEventPayloadBytes }),
@@ -235,7 +236,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     try {
       const response = await connection.request('initialize', {
         protocolVersion: 1,
-        clientCapabilities: ANTIGRAVITY_CLIENT_CAPABILITIES,
+        clientCapabilities: antigravityClientCapabilities(filesystem),
         clientInfo: { name: this.config.clientName ?? 'dsh-acp-antigravity', version: this.config.clientVersion ?? '0.1.0' },
       }, signal)
       this.identity = validateAntigravityIdentity(response)
@@ -263,7 +264,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     const params = { cwd, mcpServers: [], ...(attachmentRoots === undefined ? {} : { additionalDirectories: [...attachmentRoots] }) }
     if (request.resumeCursor !== undefined) {
       if (request.resumeCursor.provider !== this.info.id) throw new Error('Antigravity resume cursor belongs to another provider')
-      if (this.identity?.resumeMethod === 'resume') return connection.request('session/resume', { cwd, sessionId: request.resumeCursor.value }, request.signal)
+      if (this.identity?.resumeMethod === 'resume') return connection.request('session/resume', { ...params, sessionId: request.resumeCursor.value }, request.signal)
       if (this.identity?.resumeMethod === 'load') return connection.request('session/load', { ...params, sessionId: request.resumeCursor.value }, request.signal)
       throw new Error('Antigravity ACP does not advertise session resume')
     }

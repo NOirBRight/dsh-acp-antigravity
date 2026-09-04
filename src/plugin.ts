@@ -17,8 +17,9 @@ export interface InstalledAntigravityProvider {
 /** Install one Antigravity provider and its live provider-owned Settings card. */
 export function installAntigravityProvider(host: AntigravityPluginHost, config: AntigravityProviderConfig, dependencies?: AntigravityProviderDependencies): InstalledAntigravityProvider {
   const provider = new AntigravityProvider(config, dependencies)
-  const disposeProvider = host.externalAgents.register(provider)
   const disposeEditor = host.settingsEditors?.register(createAntigravitySettingsEditor(config, provider))
+  let disposeProvider: () => Promise<void>
+  try { disposeProvider = host.externalAgents.register(provider) } catch (error) { disposeEditor?.(); throw error }
   let active = true
   return {
     provider,

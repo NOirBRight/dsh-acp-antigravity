@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createSessionModelRoute, optionId, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
+import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import {
-  ANTIGRAVITY_CLIENT_CAPABILITIES,
+  antigravityClientCapabilities,
   ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PERMISSION_MODES,
   AntigravityProvider,
@@ -9,6 +9,7 @@ import {
   createAntigravityFilesystemHandler,
   createAntigravityInteractionHandler,
   createAntigravitySettingsEditor,
+  installAntigravityProvider,
   mapPermissionMode,
   parseAntigravityAuthPrelude,
   parseAntigravityAuthorizationUrl,
@@ -18,6 +19,7 @@ import {
   validateAntigravityIdentity,
   type AntigravityLaunchSpec,
 } from '../src/index.js'
+import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { spawnAntigravityAcp, type AcpConnection, type AcpRequestHandler, type AcpNotificationHandler } from '../src/protocol.js'
 
 interface FakeConnectionOptions {
@@ -43,7 +45,8 @@ class FakeConnection implements AcpConnection {
       if (this.options.authenticationAvailable === false) throw new Error('method not found')
       return {}
     }
-    if (method === 'session/new' || method === 'session/resume' || method === 'session/load') return { sessionId: 'native-1', configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
+    if (method === 'session/new') return { sessionId: 'native-1', configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
+    if (method === 'session/resume' || method === 'session/load') return { configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
     if (method === 'session/set_config_option' || method === 'session/set_mode') return {}
     if (method === 'session/prompt') {
       const updates = this.options.updates ?? [
@@ -94,7 +97,8 @@ describe('Antigravity mapping and safety', () => {
     expect(mapPermissionMode('auto-accept-edits')).toBe('auto_edit')
     expect(mapPermissionMode('full-access')).toBe('yolo')
     expect(ANTIGRAVITY_PERMISSION_MODES).toEqual(['approval-required', 'auto-accept-edits', 'full-access'])
-    expect(ANTIGRAVITY_CLIENT_CAPABILITIES.terminal).toBe(false)
+    expect(antigravityClientCapabilities(false)).toEqual({})
+    expect(antigravityClientCapabilities(true)).toEqual({ fs: { readTextFile: true, writeTextFile: true } })
   })
 
   it('parses grouped model options and preserves a stable default alias', () => {
@@ -119,6 +123,11 @@ describe('Antigravity mapping and safety', () => {
     })
     await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always' }] }, 1)).resolves.toMatchObject({ outcome: { optionId: 'always' } })
     expect(scope).toBe('session')
+  })
+
+  it('returns the ACP cancelled outcome when a permission wait aborts', async () => {
+    const handler = createAntigravityInteractionHandler({ ...host(), requestPermission: async () => { throw new TurnAbortedError('cancelled') } })
+    await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Once' }] }, 1)).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
   it('keeps OAuth links safe and redacts credential-looking diagnostics', () => {
@@ -152,6 +161,8 @@ describe('Antigravity provider lifecycle', () => {
     const events: string[] = []
     const result = await session.runTurn({ turn: turnId('turn'), prompt: 'read', attachments: [{ name: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }, { name: 'source', path: '/workspace/src/a.ts' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host(events))
     expect(result).toMatchObject({ status: 'completed', text: 'hello' })
+    expect(connections[0]?.calls.find(call => call.method === 'initialize')?.params).toMatchObject({ clientCapabilities: {} })
+    expect(connections[1]?.calls.find(call => call.method === 'initialize')?.params).toMatchObject({ clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } })
     expect(provider.live).toBe(true)
     expect(events).toEqual(['assistant-delta', 'tool-activity', 'usage', 'turn-result'])
     const prompt = connections[1]?.calls.find(call => call.method === 'session/prompt')
@@ -176,6 +187,15 @@ describe('Antigravity provider lifecycle', () => {
     const provider = new AntigravityProvider(config(), { cwd: '/fallback', launchSpec: async (_config, cwd) => { cwds.push(cwd); return launchSpec() }, connectionFactory: () => new FakeConnection() })
     const session = await provider.openSession({ route: route(), session: sessionId('workspace'), workspaceRoot: '/project', permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(cwds).toEqual(['/project'])
+    await session.dispose()
+  })
+
+  it('resumes with the persisted native ID and complete additional roots', async () => {
+    const connection = new FakeConnection()
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', filesystem: clientFilesystem(), launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: resumeCursor('antigravity', 'native-old'), attachmentRoots: ['/attachments'], permissionMode: 'approval-required', signal: new AbortController().signal })
+    expect(session.ref.nativeSession).toBe('native-old')
+    expect(connection.calls.find(call => call.method === 'session/resume')?.params).toMatchObject({ sessionId: 'native-old', cwd: '/workspace', additionalDirectories: ['/attachments'] })
     await session.dispose()
   })
 
@@ -223,6 +243,17 @@ describe('Antigravity provider lifecycle', () => {
     await session.dispose()
   })
 
+  it('rejects synthesized events that exceed the complete payload bound', async () => {
+    const published: unknown[] = []
+    const connection = new FakeConnection({ updates: [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x' } }] })
+    const provider = new AntigravityProvider({ ...config(), maxEventPayloadBytes: 45 }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('bounded-synthetic'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    const boundedHost: ExternalAgentTurnHost = { ...host(), publish: event => { published.push(event) } }
+    await expect(session.runTurn({ turn: turnId('bounded-synthetic-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, boundedHost)).resolves.toMatchObject({ status: 'failed', error: expect.stringContaining('maxPayloadBytes') })
+    expect(published.every(event => new TextEncoder().encode(JSON.stringify(event)).byteLength <= 45)).toBe(true)
+    await session.dispose()
+  })
+
   it('preserves provider failures and bounds accumulated assistant output', async () => {
     const connection = new FakeConnection({
       updates: [
@@ -254,11 +285,20 @@ describe('Antigravity provider lifecycle', () => {
     expect(editor.snapshot().status).toMatchObject({ authenticated: true, live: false, ready: true })
   })
 
+  it('does not leave a provider registered when Settings registration fails', () => {
+    const providers = new ExternalAgentProviderRegistry()
+    const editors = new ExternalAgentSettingsEditorRegistry()
+    editors.register = () => { throw new Error('editor failed') }
+    expect(() => installAntigravityProvider({ externalAgents: providers, settingsEditors: editors }, config())).toThrow('editor failed')
+    expect(providers.has('antigravity')).toBe(false)
+  })
+
   it('rejects new work after provider disposal', async () => {
     const provider = new AntigravityProvider(config(), { connectionFactory: () => new FakeConnection() })
     await provider.dispose()
     await expect(provider.listModels()).rejects.toThrow(/disposed/)
     await expect(provider.signIn()).rejects.toThrow(/disposed/)
+    await expect(provider.validateInstallation()).rejects.toThrow(/disposed/)
   })
 
   it('requires explicit full-access confirmation and audits before startup', async () => {

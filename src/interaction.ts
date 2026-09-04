@@ -1,4 +1,4 @@
-import { optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
+import { HostExpiredError, TurnAbortedError, optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import { createAntigravityFilesystemHandler } from './filesystem.js'
 import type { AcpRequestHandler } from './protocol.js'
@@ -10,15 +10,23 @@ export function createAntigravityInteractionHandler(host: ExternalAgentTurnHost,
   let sequence = 0
   return async (method, params, id) => {
     const requestKey = interactionRequestId(params, id, ++sequence)
-    if (method === 'session/request_permission') { const request = parsePermissionRequest(params, requestKey); return permissionResponse(await host.requestPermission(request), request) }
+    if (method === 'session/request_permission') return handlePermission(host, params, requestKey)
     if (method === 'session/request_user_input' || method === 'elicitation/create') return questionResponse(await host.requestUserInput(parseQuestionRequest(params, requestKey)))
     if (method.startsWith('interaction_') || method.startsWith('interaction/')) {
-      if (method.includes('permission')) { const request = parsePermissionRequest(params, requestKey); return permissionResponse(await host.requestPermission(request), request) }
+      if (method.includes('permission')) return handlePermission(host, params, requestKey)
       return questionResponse(await host.requestUserInput(parseQuestionRequest(params, requestKey)))
     }
     if (method.startsWith('terminal/')) throw new Error('Antigravity terminal capability is disabled')
     if ((method === 'fs/read_text_file' || method === 'fs/write_text_file') && fileHandler !== undefined) return fileHandler(method, params, id)
     throw new Error('Antigravity client method is unavailable: ' + method)
+  }
+}
+
+async function handlePermission(host: ExternalAgentTurnHost, params: unknown, id: string): Promise<unknown> {
+  const request = parsePermissionRequest(params, id)
+  try { return permissionResponse(await host.requestPermission(request), request) } catch (error) {
+    if (error instanceof TurnAbortedError || error instanceof HostExpiredError || error instanceof DOMException && error.name === 'AbortError') return { outcome: { outcome: 'cancelled' } }
+    throw error
   }
 }
 

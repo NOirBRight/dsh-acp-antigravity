@@ -94,11 +94,10 @@ export interface AntigravityClientFilesystem {
   resolvePath?(path: string, operation: 'read' | 'write'): Promise<string> | string
 }
 
-/** ACP client capabilities deliberately omit terminal methods. */
-export const ANTIGRAVITY_CLIENT_CAPABILITIES = {
-  fs: { readTextFile: true, writeTextFile: true },
-  terminal: false,
-} as const
+/** Advertise DSH filesystem methods only for sessions that receive its adapter. */
+export function antigravityClientCapabilities(filesystem: boolean): Readonly<Record<string, unknown>> {
+  return filesystem ? { fs: { readTextFile: true, writeTextFile: true } } : {}
+}
 
 /** Native mode values supported by the provider. */
 export const ANTIGRAVITY_PERMISSION_MODES: readonly ExternalAgentPermissionMode[] = [

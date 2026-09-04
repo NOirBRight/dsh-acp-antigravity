@@ -45,7 +45,8 @@ export class AntigravitySession implements ExternalAgentSession {
     let events = Promise.resolve()
     const maxTextBytes = this.config.maxEventTextBytes ?? 1024 * 1024
     const bounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
-    const handler = createAntigravityInteractionHandler(withBoundedExternalAgentHost(host, bounds), this.filesystem)
+    const boundedHost = withBoundedExternalAgentHost(host, bounds)
+    const handler = createAntigravityInteractionHandler(boundedHost, this.filesystem)
     this.connection.setRequestHandler(handler)
     this.connection.setNotificationHandler((method, params) => {
       if (method !== 'session/update' || protocolFailure !== undefined) return
@@ -59,7 +60,7 @@ export class AntigravitySession implements ExternalAgentSession {
           textBytes += utf8Length(delta)
         }
         if (event.type === 'turn-result' && event.status === 'failed') providerFailure = event.content ?? 'Antigravity turn failed'
-        events = events.then(() => host.publish(event))
+        events = events.then(() => boundedHost.publish(event))
       } catch (protocolError) {
         protocolFailure = new Error('Antigravity emitted a malformed session update', { cause: protocolError })
         try { this.connection.notify('session/cancel', { sessionId: this.nativeId }) } catch { /* The transport is already closing. */ }
@@ -75,11 +76,11 @@ export class AntigravitySession implements ExternalAgentSession {
       const response = await this.connection.request('session/prompt', { sessionId: this.nativeId, prompt }, request.signal)
       await events
       if (protocolFailure !== undefined) throw protocolFailure
-      await publishUsage(response, host)
+      await publishUsage(response, boundedHost)
       const stopReason = isRecord(response) ? response.stopReason : undefined
       const failure = providerFailure ?? responseFailure(response)
       const status = request.signal.aborted || stopReason === 'cancelled' ? 'cancelled' : failure !== undefined || stopReason === 'refusal' || stopReason === 'error' ? 'failed' : 'completed'
-      await host.publish({ type: 'turn-result', status, content: text })
+      await boundedHost.publish({ type: 'turn-result', status, content: text })
       return { status, text, nativeSessionId: this.nativeSession, ...(this.ref.resumeCursor === undefined ? {} : { resumeCursor: this.ref.resumeCursor }), ...(status === 'failed' ? { error: redactAntigravityText(failure ?? String(stopReason ?? 'provider turn failed')) } : {}) }
     } catch (error) {
       if (request.signal.aborted || isAbortError(error)) return { status: 'cancelled', text, nativeSessionId: this.nativeSession }
