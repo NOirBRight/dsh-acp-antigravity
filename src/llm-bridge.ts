@@ -29,8 +29,9 @@ function textOf(value: unknown): string {
   return ''
 }
 
-export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvider | undefined, getCachedModels?: () => readonly { id: string; name: string }[]): {
+export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvider | undefined, getCachedModels?: () => readonly { id: string; name: string }[], setCachedModels?: (models: readonly { id: string; name: string }[]) => void): {
   providerInfo(provider: string): { id: string; name: string }
+  providerRetryPolicy(_provider: string): undefined
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
   resolveModel(provider: string, model: string): Promise<{ provider: string; id: string; name: string }>
   stream(options: { provider: string; model: string; messages: readonly unknown[]; signal?: AbortSignal; sessionId?: string }): AsyncIterable<{ type: string; [key: string]: unknown }>
@@ -39,9 +40,20 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
   let turns = 0
   return {
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
+    providerRetryPolicy: () => undefined,
     listModels: async provider => {
       const cached = getCachedModels?.() ?? []
-      return cached.map(model => ({ provider, id: model.id, name: model.name }))
+      if (cached.length > 0) return cached.map(model => ({ provider, id: model.id, name: model.name }))
+      const installed = getProvider()
+      if (installed === undefined) return []
+      try {
+        const listed = await installed.listModels()
+        const models = listed.map(model => ({ id: String(model.id), name: model.name }))
+        setCachedModels?.(models)
+        return models.map(model => ({ provider, id: model.id, name: model.name }))
+      } catch {
+        return []
+      }
     },
     resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
     stream: async function* (options) {

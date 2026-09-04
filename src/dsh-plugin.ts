@@ -122,7 +122,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   await mount(live)
   if (typeof ctx.inject === 'function') {
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
-      const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models)
+      const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models, next => { models = [...next] })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })
   }
