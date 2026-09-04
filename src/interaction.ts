@@ -1,4 +1,5 @@
 import { optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
+import { isRecord, stringValue } from './decode.js'
 import { createAntigravityFilesystemHandler } from './filesystem.js'
 import type { AcpRequestHandler } from './protocol.js'
 import type { AntigravityClientFilesystem } from './types.js'
@@ -109,6 +110,3 @@ function questionResponse(answer: Awaited<ReturnType<ExternalAgentTurnHost['requ
   const answers = [...answer.answers]
   return { answer: answers[0] ?? '', answers }
 }
-
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
-function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.length > 0 ? value : undefined }

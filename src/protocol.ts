@@ -21,6 +21,7 @@ import {
   type ReadTextFileResponse,
 } from '@agentclientprotocol/sdk'
 import { ANTIGRAVITY_AUTH_STDOUT_PREFIX, parseAntigravityAuthPrelude, redactAntigravityText } from './auth.js'
+import { isRecord } from './decode.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
 import type { AntigravityLaunchSpec } from './installation.js'
 
@@ -246,7 +247,6 @@ function asAcp<T>(value: unknown, method: string): T {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('ACP ' + method + ' parameters are malformed')
   return value as T
 }
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function requestId(params: unknown): number { return typeof params === 'object' && params !== null && 'requestId' in params && typeof params.requestId === 'number' ? params.requestId : 0 }
 function toElicitationResponse(value: unknown): CreateElicitationResponse {
   if (!isRecord(value) || !Array.isArray(value.answers) || value.answers.length === 0) return { action: 'decline' }

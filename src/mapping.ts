@@ -5,6 +5,7 @@ import {
   type ExternalAgentModel,
   type ExternalAgentPermissionMode,
 } from '@deepseek-ai/dsh-acp-provider'
+import { isRecord, stringValue } from './decode.js'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PERMISSION_MODES,
@@ -23,9 +24,6 @@ export function mapPermissionMode(mode: ExternalAgentPermissionMode): Antigravit
 
 /** Return the modes advertised by this provider. */
 export function supportedPermissionModes(): readonly ExternalAgentPermissionMode[] { return ANTIGRAVITY_PERMISSION_MODES }
-
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
-function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.length > 0 ? value : undefined }
 
 /** Parse grouped or flat ACP model configuration options. */
 export function parseAntigravityModels(value: unknown): readonly ExternalAgentModel[] {
@@ -69,7 +67,8 @@ export function validateAntigravityIdentity(response: unknown): AntigravityIdent
   const agentName = stringValue(agentInfo?.name)
   if (agentName !== 'antigravity-acp') throw new Error('ACP executable is not antigravity-acp')
   const agentVersion = stringValue(agentInfo?.version)
-  const capabilities = isRecord(response.agentCapabilities) ? response.agentCapabilities : {}
+  if (!isRecord(response.agentCapabilities)) throw new Error('Antigravity ACP capabilities are missing')
+  const capabilities = response.agentCapabilities
   const sessionCapabilities = isRecord(response.sessionCapabilities) ? response.sessionCapabilities : {}
   const resumeMethod: 'resume' | 'load' | undefined = sessionCapabilities.resume !== undefined && sessionCapabilities.resume !== null || capabilities.sessionResume === true || capabilities.resumeSession === true ? 'resume' : capabilities.loadSession === true ? 'load' : undefined
   const supportsResume = resumeMethod !== undefined
@@ -77,9 +76,6 @@ export function validateAntigravityIdentity(response: unknown): AntigravityIdent
     protocolVersion: 1,
     agentName,
     ...(agentVersion === undefined ? {} : { agentVersion }),
-    supportsFileRead: true,
-    supportsFileWrite: true,
-    supportsTerminal: false,
     supportsResume,
     ...(resumeMethod === undefined ? {} : { resumeMethod }),
   }

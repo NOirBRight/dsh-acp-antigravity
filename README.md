@@ -39,16 +39,17 @@ Installation paths are explicit. On Linux the launch uses the provider-required 
 
 Authentication uses personal Google OAuth through the ACP server. OAuth data is stored in a profile derived from stateDirectory and instanceId; credentials and authorization codes are not returned in health or Settings snapshots.
 
-Use createAntigravitySettingsEditor() to expose installation validation, model refresh, sign-in, and sign-out through the generic Settings editor. The editor reports installation, authentication, liveness, and readiness separately.
+Use createAntigravitySettingsEditor() to expose installation validation, negotiated ACP version, model refresh, sign-in, and sign-out through the generic Settings editor. The editor reports installation, authentication, liveness, and readiness separately; session startup fails before session creation when authentication cannot be verified.
 
 ## Session behavior
 
 - The provider accepts approval-required, auto-accept-edits, and full-access modes and applies the native mode before each prompt.
 - Full access requires confirmation and a value-free audit callback before ACP startup.
 - Native permission option IDs are preserved exactly; allow_always is accepted only with a native session or thread scope.
-- Native tool activity is published as activity and is never re-executed by DSH.
+- Native tool activity is published as activity and is never re-executed by DSH. Malformed updates fail and cancel the active turn without exposing their raw payload.
+- Assistant deltas and their accumulated turn result are bounded by maxEventTextBytes; provider failure text remains a failed result even when ACP returns end_turn.
 - ACP cancellation sends session/cancel, then closes the transport if the process does not quiesce within the bounded escalation window.
-- DSH-owned filesystem roots are forwarded to ACP as additional directories. Read and write requests use the host filesystem adapter and its required operation-aware path resolver; terminal methods are not exposed.
+- DSH-owned filesystem roots are forwarded to ACP as additional directories. Read and write requests use the host filesystem adapter and its required operation-aware path resolver; host terminal methods are not exposed. The Settings warning states that Antigravity's native terminal may still reach paths outside these roots.
 
 ## Host composition
 

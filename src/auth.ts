@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { URL } from 'node:url'
+import { isRecord } from './decode.js'
 import type { AntigravityAuthMethod, AntigravityAuthorizationRequest, AntigravityProviderConfig } from './types.js'
 
 /** Stdout prefix emitted by the personal Google OAuth ACP server. */
@@ -26,7 +27,6 @@ const ambientCredentialKeys = new Set([
   'GEMINI_HOME',
   'AGY_ACP_FORCE_FILE_STORAGE',
   'ANTIGRAVITY_HARNESS_PATH',
-  'BROWSER',
 ])
 
 /** Resolve an owner-isolated state directory without exposing the instance id in paths. */
@@ -63,7 +63,6 @@ export async function clearAntigravityProfile(config: AntigravityProviderConfig)
   return prepareAntigravityProfile(config)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function isFileNotFound(error: unknown): error is NodeJS.ErrnoException { return error instanceof Error && 'code' in error && error.code === 'ENOENT' }
 
 /** Build a provider environment with ambient Google credentials removed first. */

@@ -62,9 +62,6 @@ export interface AntigravityIdentity {
   readonly protocolVersion: number
   readonly agentName: string
   readonly agentVersion?: string
-  readonly supportsFileRead: boolean
-  readonly supportsFileWrite: boolean
-  readonly supportsTerminal: boolean
   readonly supportsResume: boolean
   readonly resumeMethod?: 'resume' | 'load'
 }

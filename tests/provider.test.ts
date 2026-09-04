@@ -7,6 +7,7 @@ import {
   AntigravityProvider,
   buildAntigravityEnvironment,
   createAntigravityFilesystemHandler,
+  createAntigravitySettingsEditor,
   mapPermissionMode,
   parseAntigravityAuthPrelude,
   parseAntigravityAuthorizationUrl,
@@ -18,22 +19,36 @@ import {
 } from '../src/index.js'
 import { spawnAntigravityAcp, type AcpConnection, type AcpRequestHandler, type AcpNotificationHandler } from '../src/protocol.js'
 
+interface FakeConnectionOptions {
+  readonly authenticationAvailable?: boolean
+  readonly updates?: readonly unknown[]
+  readonly promptResponse?: unknown
+}
+
 class FakeConnection implements AcpConnection {
   readonly calls: { readonly method: string; readonly params: unknown }[] = []
   private requestHandler: AcpRequestHandler | undefined
   private notificationHandler: AcpNotificationHandler | undefined
   private closed = false
 
+  constructor(private readonly options: FakeConnectionOptions = {}) {}
+
   async request(method: string, params?: unknown): Promise<unknown> {
     this.calls.push({ method, params })
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionResume: true } }
-    if (method === 'authenticate') throw new Error('method not found')
+    if (method === 'authenticate') {
+      if (this.options.authenticationAvailable === false) throw new Error('method not found')
+      return {}
+    }
     if (method === 'session/new' || method === 'session/resume' || method === 'session/load') return { sessionId: 'native-1', configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
     if (method === 'session/set_config_option' || method === 'session/set_mode') return {}
     if (method === 'session/prompt') {
-      this.notificationHandler?.('session/update', { sessionId: 'native-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } } })
-      this.notificationHandler?.('session/update', { sessionId: 'native-1', update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'read', status: 'completed', locations: ['/workspace/src/a.ts'] } })
-      return { stopReason: 'end_turn', usage: { inputTokens: 2, outputTokens: 3 } }
+      const updates = this.options.updates ?? [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'read', status: 'completed', locations: ['/workspace/src/a.ts'] },
+      ]
+      for (const update of updates) this.notificationHandler?.('session/update', { sessionId: 'native-1', update })
+      return this.options.promptResponse ?? { stopReason: 'end_turn', usage: { inputTokens: 2, outputTokens: 3 } }
     }
     throw new Error('method not found')
   }
@@ -77,9 +92,10 @@ describe('Antigravity mapping and safety', () => {
   })
 
   it('validates protocol identity and rejects another ACP executable', () => {
-    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1' } })).toMatchObject({ agentName: 'antigravity-acp', supportsTerminal: false })
+    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1' }, agentCapabilities: {} })).toMatchObject({ agentName: 'antigravity-acp', supportsResume: false })
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'Other Agent' } })).toThrow(/not antigravity-acp/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 2, agentInfo: { name: 'antigravity-acp' } })).toThrow(/version/)
+    expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' } })).toThrow(/capabilities/)
   })
 
   it('keeps OAuth links safe and redacts credential-looking diagnostics', () => {
@@ -127,6 +143,50 @@ describe('Antigravity provider lifecycle', () => {
     const session = await provider.openSession({ route: route(), session: sessionId('workspace'), workspaceRoot: '/project', permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(cwds).toEqual(['/project'])
     await session.dispose()
+  })
+
+  it('fails before session creation when authentication cannot be verified', async () => {
+    const connection = new FakeConnection({ authenticationAvailable: false })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    await expect(provider.openSession({ route: route(), session: sessionId('unauthenticated'), permissionMode: 'approval-required', signal: new AbortController().signal })).rejects.toThrow(/Sign in/)
+    expect(connection.calls.map(call => call.method)).toEqual(['initialize', 'authenticate'])
+    expect(provider.health.status).toBe('authentication-required')
+  })
+
+  it('fails a turn and cancels native work after malformed ACP output', async () => {
+    const connection = new FakeConnection({ updates: [{ malformed: true }] })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('malformed'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('malformed-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', error: 'Antigravity emitted a malformed session update' })
+    expect(connection.calls.some(call => call.method === 'session/cancel')).toBe(true)
+    await session.dispose()
+  })
+
+  it('preserves provider failures and bounds accumulated assistant output', async () => {
+    const connection = new FakeConnection({
+      updates: [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'abc' } },
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'def' } },
+      ],
+      promptResponse: { stopReason: 'end_turn', error: 'quota exceeded' },
+    })
+    const provider = new AntigravityProvider({ ...config(), maxEventTextBytes: 5 }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('quota'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('quota-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', text: 'abcde', error: 'quota exceeded' })
+    await session.dispose()
+  })
+
+  it('shows the negotiated version and native-terminal scope in Settings', async () => {
+    const provider = new AntigravityProvider(config(), {
+      cwd: '/workspace',
+      installationProbe: { stat: async () => ({ isFile: true, mode: 0o755 }) },
+      launchSpec: async () => launchSpec(),
+      connectionFactory: () => new FakeConnection(),
+    })
+    await expect(provider.validateInstallation()).resolves.toMatchObject({ version: '1.2.3' })
+    const fields = createAntigravitySettingsEditor(config(), provider).snapshot().fields
+    expect(fields.find(field => field.key === 'version')?.value).toBe('1.2.3')
+    expect(fields.find(field => field.key === 'fullAccessWarning')?.value).toContain('outside DSH client-filesystem roots')
   })
 
   it('rejects new work after provider disposal', async () => {

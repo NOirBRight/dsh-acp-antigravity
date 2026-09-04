@@ -35,8 +35,9 @@ export function createAntigravitySettingsEditor(config: AntigravityProviderConfi
         { key: 'harnessPath', label: 'localharness_external executable', kind: 'text', value: config.harnessPath },
         { key: 'stateDirectory', label: 'Private profile directory', kind: 'text', value: config.stateDirectory },
         { key: 'status', label: 'Installation and account status', kind: 'status', value: health.message ?? health.status },
+        ...(health.version === undefined ? [] : [{ key: 'version', label: 'Detected ACP version', kind: 'status' as const, value: health.version }]),
         { key: 'selectedModel', label: 'Selected model', kind: 'status', value: health.model ?? config.model ?? 'account default' },
-        { key: 'fullAccessWarning', label: 'Full-access warning', kind: 'status', value: 'Requires explicit confirmation and an audit event before startup.' },
+        { key: 'fullAccessWarning', label: 'Full-access warning', kind: 'status', value: 'Requires explicit confirmation and an audit event before startup. Antigravity native terminal access may reach paths outside DSH client-filesystem roots.' },
       ]
       return {
         provider: id,
