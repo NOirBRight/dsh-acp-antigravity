@@ -86,22 +86,32 @@ function estimateTokens(text: string): number {
 
 function formatToolActivity(event: { name: string; status: string; input?: string; output?: string; error?: string }): string {
   if (event.status === 'pending' || event.status === 'running') return ''
-  const title = event.name.replace(/_/g, ' ')
-  const target = toolTarget(event.input)
+  const input = parseJsonRecord(event.input)
+  const output = parseJsonRecord(event.output)
+  const command = stringField(input, 'CommandLine') ?? stringField(input, 'commandLine') ?? stringField(output, 'commandLine')
+  const path = stringField(input, 'AbsolutePath') ?? stringField(input, 'file_path') ?? stringField(input, 'directory_path') ?? stringField(input, 'path') ?? stringField(output, 'workingDir')
+  const title = command ?? (event.name === 'native tool' ? 'tool' : event.name.replace(/_/g, ' '))
+  const target = path === undefined ? undefined : fileLink(path)
   const nl = String.fromCharCode(10)
-  const head = '<strong>' + title + '</strong>' + (target === undefined ? '' : ' · ' + target) + ' · ' + event.status
-  const body = event.error ?? event.output
-  if (body === undefined || body.length === 0) return '<p>' + head + '</p>' + nl
-  return '<details><summary>' + head + '</summary>' + nl + nl + body.slice(0, 4000) + nl + '</details>' + nl
+  const head = '**' + title + '**' + (target === undefined ? '' : ' · ' + target) + ' · ' + event.status
+  const body = event.error ?? stringField(output, 'combinedOutput') ?? stringField(output, 'formatted_output') ?? (output === undefined ? event.output : undefined)
+  if (body === undefined || body.length === 0) return head + nl + nl
+  return head + nl + nl + '```' + nl + body.slice(0, 4000) + nl + '```' + nl + nl
+}
+
+function parseJsonRecord(raw?: string): Record<string, unknown> | undefined {
+  if (raw === undefined || raw.length === 0) return undefined
+  try {
+    const value = JSON.parse(raw) as unknown
+    return isRecord(value) ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function toolTarget(input?: string): string | undefined {
   if (input === undefined || input.length === 0) return undefined
-  let parsed: Record<string, unknown> | undefined
-  try {
-    const value = JSON.parse(input) as unknown
-    if (isRecord(value)) parsed = value
-  } catch { /* raw command line */ }
+  const parsed = parseJsonRecord(input)
   const path = parsed === undefined
     ? undefined
     : stringField(parsed, 'AbsolutePath') ?? stringField(parsed, 'file_path') ?? stringField(parsed, 'directory_path') ?? stringField(parsed, 'path')
@@ -112,8 +122,8 @@ function toolTarget(input?: string): string | undefined {
   return undefined
 }
 
-function stringField(value: Record<string, unknown>, key: string): string | undefined {
-  const item = value[key]
+function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const item = value?.[key]
   return typeof item === 'string' && item.length > 0 ? item : undefined
 }
 
