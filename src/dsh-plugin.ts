@@ -4,6 +4,7 @@ import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provid
 import { join } from 'node:path'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath } from './installation.js'
+import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
 import { registerAcpSettingsRpc } from './rpc.js'
 import { dshHome, loadPersistedConfig, savePersistedConfig } from './store.js'
@@ -60,6 +61,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   const home = dshHome()
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined
+  let probeMessage: string | undefined
   const registry = new ExternalAgentProviderRegistry()
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
@@ -94,7 +96,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
       live: editor?.status.live ?? false,
       ready: editor?.status.ready ?? health?.status === 'ready',
-      ...((): { message?: string } => { const message = editor?.status.message ?? health?.message; return message === undefined ? {} : { message } })(),
+      ...((): { message?: string } => { const message = editor?.status.message ?? health?.message ?? probeMessage; return message === undefined ? {} : { message } })(),
       ...(health?.version === undefined ? {} : { version: health.version }),
       ...(health?.profileDirectory === undefined ? {} : { profileDirectory: health.profileDirectory }),
       ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
@@ -119,6 +121,16 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }
+      }
+      if (action === 'probe-installation') {
+        const found = await probeAntigravityInstallation()
+        probeMessage = found.message
+        if (found.executablePath !== undefined && found.harnessPath !== undefined) {
+          const next = { ...live, executablePath: found.executablePath, harnessPath: found.harnessPath }
+          await mount(next)
+          savePersistedConfig(home, next)
+        }
+        return found
       }
       return editor.run(action, signal)
     },

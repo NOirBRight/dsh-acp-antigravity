@@ -104,9 +104,15 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   const [error, setError] = useState<string | undefined>(undefined)
 
   const refresh = async (): Promise<void> => {
-    const next = await load()
+    let next = await load()
     setSnapshot(next)
     setDraft(next.rows[0])
+    try {
+      await run('probe-installation')
+      next = await load()
+      setSnapshot(next)
+      setDraft(next.rows[0])
+    } catch { /* keep the snapshot when PATH probe is unavailable */ }
     if (next.rows[0]?.installed) {
       try { await run('refresh-models') } catch { /* models stay empty until sign-in */ }
       const after = await load()

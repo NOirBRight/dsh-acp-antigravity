@@ -23,7 +23,7 @@ export type AcpSettingsKey =
 export const zh: Record<AcpSettingsKey, string> = {
   nav: 'External Agents',
   title: 'External Agents',
-  intro: '配置 Antigravity ACP 可执行文件对，校验安装，并用个人 Google 账号登录。保存后写入本机 profile。',
+  intro: '需要 Google 的 agy_acp_server 与同目录 localharness_external，不是 agy CLI。Rescan 会搜 PATH；找到后点 Save 再 Sign in。',
   rescan: 'Rescan',
   save: 'Save',
   saved: 'Saved',
