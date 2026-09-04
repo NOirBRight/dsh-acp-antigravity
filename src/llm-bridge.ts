@@ -24,6 +24,19 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil([...text].length / 4))
 }
 
+function formatToolActivity(event: { name: string; status: string; input?: string; output?: string; error?: string }): string {
+  const parts = [event.name, event.status]
+  if (event.input) parts.push(event.input)
+  if (event.output) parts.push(event.output)
+  if (event.error) parts.push(event.error)
+  return parts.join(' · ') + String.fromCharCode(10)
+}
+
+function formatPlanUpdate(event: { summary: string; steps: readonly string[] }): string {
+  const lines = [event.summary, ...event.steps.map(step => '- ' + step)]
+  return lines.join(String.fromCharCode(10)) + String.fromCharCode(10)
+}
+
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) return value.map(textOf).filter(part => part.length > 0).join(String.fromCharCode(10))
@@ -84,14 +97,16 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
         sessions.set(key, session)
       }
       const prompt = lastUserText(options.messages)
-      const deltas: string[] = []
+      const pending: { kind: 'thought' | 'text'; text: string }[] = []
       let wake: (() => void) | undefined
       const host = createExternalAgentTurnHost(options.signal ?? new AbortController().signal, {
         publish: event => {
-          if (event.type === 'assistant-delta' && event.text.length > 0) {
-            deltas.push(event.text)
-            wake?.()
-          }
+          if (event.type === 'thought-delta' && event.text.length > 0) pending.push({ kind: 'thought', text: event.text })
+          else if (event.type === 'assistant-delta' && event.text.length > 0) pending.push({ kind: 'text', text: event.text })
+          else if (event.type === 'tool-activity') pending.push({ kind: 'text', text: formatToolActivity(event) })
+          else if (event.type === 'plan-update') pending.push({ kind: 'text', text: formatPlanUpdate(event) })
+          else return
+          wake?.()
         },
         requestPermission: async request => {
           const once = request.options.find(option => option.kind === 'allow_once')
@@ -105,22 +120,41 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
         permissionMode: 'auto-accept-edits',
         signal: options.signal ?? new AbortController().signal,
       }, host)
-      yield { type: 'block-start', index: 0, blockType: 'text' }
-      let assembled = ''
+      let thought = ''
+      let text = ''
+      let thoughtOpen = false
+      let textOpen = false
       while (true) {
-        if (deltas.length === 0) {
+        if (pending.length === 0) {
           const settled = await Promise.race([running.then(() => 'done' as const), new Promise<'more'>(resolve => { wake = () => resolve('more') })])
-          if (settled === 'done' && deltas.length === 0) break
+          if (settled === 'done' && pending.length === 0) break
         }
-        const delta = deltas.shift()
-        if (delta === undefined) break
-        assembled += delta
-        yield { type: 'text-delta', index: 0, text: delta }
+        const item = pending.shift()
+        if (item === undefined) break
+        if (item.kind === 'thought') {
+          if (!thoughtOpen) {
+            yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+            thoughtOpen = true
+          }
+          thought += item.text
+          yield { type: 'reasoning-delta', index: 0, text: item.text }
+        } else {
+          if (!textOpen) {
+            yield { type: 'block-start', index: 1, blockType: 'text' }
+            textOpen = true
+          }
+          text += item.text
+          yield { type: 'text-delta', index: 1, text: item.text }
+        }
       }
       const result = await running
-      const text = assembled.length > 0 ? assembled : result.text
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-      yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(text) } }
+      if (thoughtOpen) yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: thought } }
+      const assembled = text.length > 0 ? text : result.text
+      if (textOpen || assembled.length > 0) {
+        if (!textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
+        yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
+      }
+      yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(assembled) } }
       yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
