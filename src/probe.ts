@@ -37,14 +37,18 @@ function searchDirs(): string[] {
 
 /** Find agy_acp_server and its sibling localharness_external. */
 export async function probeAntigravityInstallation(platform: NodeJS.Platform = process.platform): Promise<AntigravityProbeResult> {
-  const serverName = platform === 'win32' ? 'agy_acp_server.exe' : 'agy_acp_server'
+  const serverNames = platform === 'win32' ? ['agy_acp_server.exe'] : ['agy_acp_server.par', 'agy_acp_server']
   const cliName = platform === 'win32' ? 'agy.exe' : 'agy'
   let agyCli: string | undefined
   for (const dir of searchDirs()) {
     const cli = join(dir, cliName)
     if (agyCli === undefined && await isExecutableFile(cli)) agyCli = cli
-    const executablePath = join(dir, serverName)
-    if (!await isExecutableFile(executablePath)) continue
+    let executablePath: string | undefined
+    for (const serverName of serverNames) {
+      const candidate = join(dir, serverName)
+      if (await isExecutableFile(candidate)) { executablePath = candidate; break }
+    }
+    if (executablePath === undefined) continue
     const harnessPath = deriveAntigravityHarnessPath(executablePath, platform)
     if (!await isExecutableFile(harnessPath)) {
       return { ...(agyCli === undefined ? {} : { agyCli }), message: 'Found ' + executablePath + ' but sibling localharness_external is missing.' }

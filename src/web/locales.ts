@@ -19,11 +19,13 @@ export type AcpSettingsKey =
   | 'executable'
   | 'harness'
   | 'profile'
+  | 'install'
+  | 'installing'
 
 export const zh: Record<AcpSettingsKey, string> = {
   nav: 'External Agents',
   title: 'External Agents',
-  intro: '需要 Google 的 agy_acp_server 与同目录 localharness_external，不是 agy CLI。Rescan 会搜 PATH；找到后点 Save 再 Sign in。',
+  intro: 'Install 会从 Google 下载 ACP 运行时（agy_acp_server.par + localharness_external），不使用 agy CLI。完成后 Sign in。',
   rescan: 'Rescan',
   save: 'Save',
   saved: 'Saved',
@@ -41,6 +43,8 @@ export const zh: Record<AcpSettingsKey, string> = {
   executable: 'ACP server',
   harness: 'localharness_external',
   profile: 'Profile',
+  install: 'Install Antigravity',
+  installing: 'Installing…',
 }
 
 export const en: Record<AcpSettingsKey, string> = { ...zh }

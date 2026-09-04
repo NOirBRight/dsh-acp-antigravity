@@ -4,6 +4,7 @@ import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provid
 import { join } from 'node:path'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath } from './installation.js'
+import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
 import { registerAcpSettingsRpc } from './rpc.js'
@@ -62,6 +63,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined
   let probeMessage: string | undefined
+  let install: ManagedInstallProgress | undefined
+  let installJob: Promise<void> | undefined
   const registry = new ExternalAgentProviderRegistry()
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
@@ -101,7 +104,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       ...(health?.profileDirectory === undefined ? {} : { profileDirectory: health.profileDirectory }),
       ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
     }
-    return { title: 'External Agents', rows: [row] }
+    return { title: 'External Agents', rows: [row], ...(install === undefined ? {} : { install: { phase: install.phase, downloadedBytes: install.downloadedBytes, totalBytes: install.totalBytes, message: install.message } }) }
   }
 
   await mount(live)
@@ -121,6 +124,23 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }
+      }
+      if (action === 'install-runtime') {
+        if (installJob === undefined) {
+          installJob = (async () => {
+            const result = await installManagedAntigravityRuntime({
+              home,
+              onProgress: progress => { install = progress },
+            })
+            install = result
+            if (result.phase === 'succeeded' && result.executablePath !== undefined && result.harnessPath !== undefined) {
+              const next = { ...live, executablePath: result.executablePath, harnessPath: result.harnessPath }
+              await mount(next)
+              savePersistedConfig(home, next)
+            }
+          })().finally(() => { installJob = undefined })
+        }
+        return install ?? { phase: 'downloading', downloadedBytes: 0, totalBytes: 0, message: 'Starting Antigravity install.' }
       }
       if (action === 'probe-installation') {
         const found = await probeAntigravityInstallation()

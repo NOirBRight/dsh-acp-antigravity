@@ -37,10 +37,19 @@ export interface AcpSettingsRow {
   readonly authorizationUrl?: string
 }
 
+/** Progress for the managed Google ACP download. */
+export interface AcpInstallProgress {
+  readonly phase: 'idle' | 'downloading' | 'extracting' | 'verifying' | 'succeeded' | 'failed'
+  readonly downloadedBytes: number
+  readonly totalBytes: number
+  readonly message: string
+}
+
 /** Generic External Agents page snapshot. */
 export interface AcpSettingsSnapshot {
   readonly title: 'External Agents'
   readonly rows: readonly AcpSettingsRow[]
+  readonly install?: AcpInstallProgress
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -82,7 +91,10 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
       ...(typeof row.authorizationUrl === 'string' ? { authorizationUrl: row.authorizationUrl } : {}),
     })
   }
-  return { title: 'External Agents', rows }
+  const install = isRecord(value.install) && typeof value.install.phase === 'string' && typeof value.install.message === 'string' && typeof value.install.downloadedBytes === 'number' && typeof value.install.totalBytes === 'number'
+    ? { phase: value.install.phase as AcpInstallProgress['phase'], downloadedBytes: value.install.downloadedBytes, totalBytes: value.install.totalBytes, message: value.install.message }
+    : undefined
+  return { title: 'External Agents', rows, ...(install === undefined ? {} : { install }) }
 }
 
 /** Decode a persisted Settings document. */

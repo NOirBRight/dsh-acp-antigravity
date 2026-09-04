@@ -1,7 +1,7 @@
 /** External Agents settings page for the Antigravity ACP provider. */
 import { useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AcpSettingsRow, AcpSettingsSnapshot } from '../client-contract.ts'
+import type { AcpInstallProgress, AcpSettingsRow, AcpSettingsSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
 
 export interface AcpSettingsFace {
@@ -51,8 +51,10 @@ function ProviderCard(props: {
   onChange: (row: AcpSettingsRow) => void
   onLocate: (target: 'executablePath' | 'harnessPath') => void
   onRun: (action: string) => void
+  install?: AcpInstallProgress
 }): JSX.Element {
-  const { row, t, onChange, onLocate, onRun } = props
+  const { row, t, onChange, onLocate, onRun, install } = props
+  const installing = install?.phase === 'downloading' || install?.phase === 'extracting' || install?.phase === 'verifying'
   const missing = !row.installed
   return (
     <li style={cardShell(row.ready && row.enabled, missing || !row.enabled)}>
@@ -84,7 +86,9 @@ function ProviderCard(props: {
         </select>
       </label>
       {row.profileDirectory ? <div style={meta}>{t('profile')}: {row.profileDirectory}</div> : null}
+      {install !== undefined && install.phase !== 'idle' ? <div style={meta}>{install.message}{install.totalBytes > 0 && installing ? ' ' + String(Math.round(100 * install.downloadedBytes / install.totalBytes)) + '%' : ''}</div> : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type='button' style={ghostBtn} disabled={installing} onClick={() => onRun('install-runtime')}>{installing ? t('installing') : t('install')}</button>
         {row.authenticated
           ? <button type='button' style={ghostBtn} onClick={() => onRun('sign-out')}>{t('signOut')}</button>
           : <button type='button' style={ghostBtn} onClick={() => onRun('sign-in')}>{t('signIn')}</button>}
@@ -122,6 +126,12 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   }
 
   useEffect(() => { void refresh().catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }, [])
+  const installPhase = snapshot?.install?.phase
+  useEffect(() => {
+    if (installPhase !== 'downloading' && installPhase !== 'extracting' && installPhase !== 'verifying') return
+    const timer = window.setInterval(() => { void load().then(next => { setSnapshot(next); setDraft(next.rows[0]) }).catch(() => undefined) }, 500)
+    return () => window.clearInterval(timer)
+  }, [installPhase, load])
 
   const row = draft
   return (
@@ -157,6 +167,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
                 setDraft(current => current === undefined ? current : { ...current, [target]: path, ...(target === 'executablePath' && current.harnessPath === '' ? { harnessPath: path.replace(/agy_acp_server[^/]*$/u, 'localharness_external') } : {}) })
               })
             }}
+            install={snapshot.install}
             onRun={action => { void run(action).then(() => refresh()).catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }}
           />
         )}
