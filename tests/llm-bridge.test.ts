@@ -8,6 +8,8 @@ describe('Antigravity LLM bridge', () => {
       { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
       { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '你是什么模型' }] },
+      { role: 'user', source: { kind: 'agent-instructions' }, content: [{ type: 'text', text: 'workspace instructions' }] },
+      { role: 'user', source: { kind: 'skill-catalog' }, content: [{ type: 'text', text: 'available skills' }] },
       { role: 'user', source: { kind: 'plugin', plugin: 'dsh-system-prompt', form: 'snapshot' }, content: [{ type: 'text', text: 'sandbox policy' }] },
     ])).toBe('你是什么模型')
   })
@@ -28,7 +30,7 @@ describe('Antigravity LLM bridge', () => {
       }),
     }) as never)
     const chunks: unknown[] = []
-    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', content: 'ping' }] })) chunks.push(chunk)
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', source: { kind: 'user' }, content: 'ping' }] })) chunks.push(chunk)
     expect(chunks.some(chunk => typeof chunk === 'object' && chunk !== null && 'text' in chunk && (chunk as { text: string }).text === 'ok-ping')).toBe(true)
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: 'stop' })
   })

@@ -13,11 +13,9 @@ export function lastUserText(messages: readonly unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (!isRecord(message)) continue
-    if (isRecord(message.source) && message.source.kind === 'plugin') continue
-    if (message.role === 'user' || (isRecord(message.source) && message.source.kind === 'user')) {
-      const text = textOf(message.content)
-      if (text.length > 0) return text
-    }
+    if (!(isRecord(message.source) && message.source.kind === 'user')) continue
+    const text = textOf(message.content)
+    if (text.length > 0) return text
   }
   return ''
 }
