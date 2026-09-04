@@ -62,4 +62,4 @@ The provider does not start a replacement DSH server and does not claim that an 
 
 ## Real-binary smoke
 
-Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm test -- real-binary`. The smoke initializes and validates the user-provided executable pair without authentication or a model request; it skips when either path is absent.
+Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm exec vitest run tests/real-binary.test.ts`. The initialize-only smoke validates the user-provided executable pair without authentication or a model request. Also set `ANTIGRAVITY_AUTHENTICATED_STATE_DIRECTORY` and `ANTIGRAVITY_AUTHENTICATED_INSTANCE_ID` to run the opt-in read-only turn, cancellation, and resume smoke against that isolated authenticated profile. Each smoke skips when its inputs are absent and neither runs in ordinary unit gates.
