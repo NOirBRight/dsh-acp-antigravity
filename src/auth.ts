@@ -1,7 +1,9 @@
-import { createHash } from 'node:crypto'
-import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
+import { chmod, lstat, mkdir, open, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { URL } from 'node:url'
+import type { ExternalAgentProviderInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord } from './decode.js'
 import type { AntigravityAuthMethod, AntigravityAuthorizationRequest, AntigravityProviderConfig } from './types.js'
 
@@ -30,13 +32,13 @@ const ambientCredentialKeys = new Set([
 ])
 
 /** Resolve an owner-isolated state directory without exposing the instance id in paths. */
-export function resolveAntigravityProfileDirectory(stateDirectory: string, instanceId: string): string {
+export function resolveAntigravityProfileDirectory(stateDirectory: string, instanceId: ExternalAgentProviderInstanceId): string {
   if (instanceId.trim() === '') throw new TypeError('instanceId must not be empty')
   const digest = createHash('sha256').update(instanceId).digest('hex')
   return join(resolve(stateDirectory), 'providers', 'antigravity', digest)
 }
 
-/** Create private profile directories and the value-free settings file. */
+/** Create private profile directories and select the personal OAuth authentication type. */
 export async function prepareAntigravityProfile(config: AntigravityProviderConfig, authMethod: AntigravityAuthMethod = 'oauth-personal'): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
   try {
@@ -47,34 +49,43 @@ export async function prepareAntigravityProfile(config: AntigravityProviderConfi
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 })
   await chmod(profileDirectory, 0o700)
   const settingsPath = join(profileDirectory, 'settings.json')
+  let settingsFile
   try {
-    if ((await lstat(settingsPath)).isSymbolicLink()) throw new Error('Antigravity settings path must not be a symbolic link')
+    settingsFile = await open(settingsPath, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)
   } catch (error) {
-    if (!isFileNotFound(error)) throw error
+    if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new Error('Antigravity settings path must not be a symbolic link')
+    throw error
   }
-  let settings: Record<string, unknown> = {}
   try {
-    const parsed = JSON.parse(await readFile(settingsPath, 'utf8'))
+    const source = await settingsFile.readFile('utf8')
+    const parsed = source === '' ? {} : JSON.parse(source)
     if (!isRecord(parsed)) throw new Error('Antigravity profile settings must be a JSON object')
-    settings = parsed
-  } catch (error) {
-    if (!isFileNotFound(error)) throw error
+    const auth = isRecord(parsed.auth) ? parsed.auth : {}
+    const output = JSON.stringify({ ...parsed, auth: { ...auth, type: authMethod } }) + '\n'
+    await settingsFile.truncate(0)
+    await settingsFile.write(output, 0, 'utf8')
+    await settingsFile.chmod(0o600)
+  } finally {
+    await settingsFile.close()
   }
-  const auth = isRecord(settings.auth) ? settings.auth : {}
-  await writeFile(settingsPath, JSON.stringify({ ...settings, auth: { ...auth, type: authMethod } }) + '\n', { mode: 0o600 })
-  await chmod(settingsPath, 0o600)
   return profileDirectory
 }
 
 /** Remove one provider-owned profile and recreate its empty private settings. */
 export async function clearAntigravityProfile(config: AntigravityProviderConfig): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
+  const quarantine = profileDirectory + '.delete-' + randomUUID()
   try {
-    if ((await lstat(profileDirectory)).isSymbolicLink()) throw new Error('Antigravity profile path must not be a symbolic link')
+    await rename(profileDirectory, quarantine)
   } catch (error) {
     if (!isFileNotFound(error)) throw error
+    return prepareAntigravityProfile(config)
   }
-  await rm(profileDirectory, { recursive: true, force: true })
+  if ((await lstat(quarantine)).isSymbolicLink()) {
+    await rm(quarantine, { force: true })
+    throw new Error('Antigravity profile path must not be a symbolic link')
+  }
+  await rm(quarantine, { recursive: true })
   return prepareAntigravityProfile(config)
 }
 
@@ -111,6 +122,8 @@ export function parseAntigravityAuthorizationUrl(authorizationUrl: string): Anti
   if (new TextEncoder().encode(authorizationUrl).byteLength > MAX_AUTHORIZATION_URL_BYTES || /\s/.test(authorizationUrl)) throw new Error('Antigravity returned an invalid Google sign-in URL')
   let url: URL
   try { url = new URL(authorizationUrl) } catch { throw new Error('Antigravity returned an invalid Google sign-in URL') }
+  const forbiddenParameters = new Set(['code', 'access_token', 'refresh_token', 'id_token', 'token', 'client_secret'])
+  if ([...url.searchParams.keys()].some(key => forbiddenParameters.has(key.toLowerCase()))) throw new Error('Antigravity returned an invalid Google sign-in URL')
   const state = url.searchParams.get('state')
   const redirectUri = url.searchParams.get('redirect_uri')
   const responseType = url.searchParams.get('response_type')

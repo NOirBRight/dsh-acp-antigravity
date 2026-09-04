@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
+import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, providerInstanceId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import {
   antigravityClientCapabilities,
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -18,6 +18,7 @@ import {
   parseAntigravityAuthPrelude,
   parseAntigravityAuthorizationUrl,
   parseAntigravityModels,
+  normalizeAntigravitySessionUpdate,
   prepareAntigravityProfile,
   redactAntigravityText,
   resolveAntigravityProfileDirectory,
@@ -82,7 +83,7 @@ class FakeConnection implements AcpConnection {
 }
 
 function config() {
-  return { executablePath: '/opt/agy/agy_acp_server', harnessPath: '/opt/agy/localharness_external', stateDirectory: '/tmp/dsh-test', instanceId: 'default', platform: 'linux' as const }
+  return { executablePath: '/opt/agy/agy_acp_server', harnessPath: '/opt/agy/localharness_external', stateDirectory: '/tmp/dsh-test', instanceId: providerInstanceId('default'), platform: 'linux' as const }
 }
 function route(model = 'gemini-pro') { return createSessionModelRoute('external-agent', 'antigravity', model) }
 function clientFilesystem() {
@@ -112,8 +113,9 @@ describe('Antigravity mapping and safety', () => {
   })
 
   it('parses grouped model options and preserves a stable default alias', () => {
-    const models = parseAntigravityModels([{ id: 'model', name: 'Model', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }, { value: 'gemini-pro', name: 'Duplicate' }] }])
+    const models = parseAntigravityModels([{ id: 'mode', type: 'select', options: [{ value: 'fake', name: 'Not a model' }] }, { id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }, { value: 'gemini-pro', name: 'Duplicate' }] }])
     expect(models.map(model => model.id)).toEqual([ANTIGRAVITY_DEFAULT_MODEL, 'gemini-pro'])
+    expect(normalizeAntigravitySessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'tool', title: 'read', locations: [{ path: '/workspace/a.ts', line: 7 }] }, { maxTextBytes: 1024, maxPayloadBytes: 4096 })).toMatchObject({ locations: [{ path: '/workspace/a.ts', line: 7 }] })
   })
 
   it('validates protocol identity and rejects another ACP executable', () => {
@@ -143,10 +145,10 @@ describe('Antigravity mapping and safety', () => {
     const handler = createAntigravityInteractionHandler({
       ...host(),
       requestPermission: async () => { throw new Error('permission callback must not run') },
-      requestUserInput: async request => { question = request; return { answers: ['Second'] } },
-    })
+      requestUserInput: async request => { question = request; return { answers: [request.options![1]!] } },
+    }, undefined, { maxTextBytes: 5, maxPayloadBytes: 1024 })
     await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { toolCallId: 'interaction_private', title: 'Pick one' }, options: [{ optionId: 'native-a', kind: 'allow_once', name: 'First' }, { optionId: 'native-b', kind: 'reject_once', name: 'Second' }] }, 7)).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'native-b' } })
-    expect(question).toMatchObject({ question: 'Pick one', options: ['First', 'Second'], multiple: false })
+    expect(question).toMatchObject({ question: 'Pick ', options: ['First', 'Secon'], multiple: false })
     expect(JSON.stringify(question)).not.toContain('interaction_private')
   })
 
@@ -169,6 +171,7 @@ describe('Antigravity mapping and safety', () => {
     expect(parseAntigravityAuthorizationUrl(url).redirectUri).toBe('http://127.0.0.1:8765/')
     expect(parseAntigravityAuthPrelude('notice\nOpen the following link to authenticate the ACP server: ' + url + '\n')).toMatchObject({ state: 'state123' })
     expect(() => parseAntigravityAuthorizationUrl(url.replace('127.0.0.1', 'evil.example'))).toThrow(/invalid/)
+    expect(() => parseAntigravityAuthorizationUrl(url + '&code=private')).toThrow(/invalid/)
     const diagnostic = redactAntigravityText('Bearer secret-token https://x.test/?code=private&state=state123 AIza' + 'A'.repeat(24))
     expect(diagnostic).not.toContain('secret-token')
     expect(diagnostic).not.toContain('private')
@@ -176,7 +179,7 @@ describe('Antigravity mapping and safety', () => {
   })
 
   it('isolates profiles and strips ambient Google credentials from process env', () => {
-    expect(resolveAntigravityProfileDirectory('/tmp/dsh', 'a')).not.toBe(resolveAntigravityProfileDirectory('/tmp/dsh', 'b'))
+    expect(resolveAntigravityProfileDirectory('/tmp/dsh', providerInstanceId('a'))).not.toBe(resolveAntigravityProfileDirectory('/tmp/dsh', providerInstanceId('b')))
     const env = buildAntigravityEnvironment({ baseEnv: { PATH: '/bin', GOOGLE_API_KEY: 'secret', GEMINI_API_KEY: 'secret2', UNRELATED_TOKEN: 'secret3', FOO_API_KEY_SUFFIX: 'secret4', X_SECRET_VALUE: 'secret5' }, profileDirectory: '/tmp/profile', harnessPath: '/tmp/harness' })
     expect(env.PATH).toBe('/bin')
     expect(env.GOOGLE_API_KEY).toBeUndefined()
@@ -191,7 +194,7 @@ describe('Antigravity mapping and safety', () => {
   it('refuses a symlinked settings file', async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), 'agy-settings-'))
     const target = join(stateDirectory, 'target.json')
-    const configured = { ...config(), stateDirectory, instanceId: 'linked-settings' }
+    const configured = { ...config(), stateDirectory, instanceId: providerInstanceId('linked-settings') }
     try {
       const profile = await prepareAntigravityProfile(configured)
       await writeFile(target, '{}')
@@ -205,13 +208,13 @@ describe('Antigravity mapping and safety', () => {
 
   it('refuses to recursively remove a symlinked profile', async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), 'agy-profile-'))
-    const profile = resolveAntigravityProfileDirectory(stateDirectory, 'linked')
+    const profile = resolveAntigravityProfileDirectory(stateDirectory, providerInstanceId('linked'))
     const target = await mkdtemp(join(tmpdir(), 'agy-target-'))
     try {
       await mkdir(dirname(profile), { recursive: true })
       await symlink(target, profile, 'dir')
-      await expect(prepareAntigravityProfile({ ...config(), stateDirectory, instanceId: 'linked' })).rejects.toThrow(/symbolic link/)
-      await expect(clearAntigravityProfile({ ...config(), stateDirectory, instanceId: 'linked' })).rejects.toThrow(/symbolic link/)
+      await expect(prepareAntigravityProfile({ ...config(), stateDirectory, instanceId: providerInstanceId('linked') })).rejects.toThrow(/symbolic link/)
+      await expect(clearAntigravityProfile({ ...config(), stateDirectory, instanceId: providerInstanceId('linked') })).rejects.toThrow(/symbolic link/)
     } finally {
       await rm(stateDirectory, { recursive: true, force: true })
       await rm(target, { recursive: true, force: true })
@@ -379,7 +382,9 @@ describe('Antigravity provider lifecycle', () => {
     const connection = new FakeConnection({ hangClose: true })
     const provider = new AntigravityProvider({ ...config(), cancelGraceMs: 5 }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
     const session = await provider.openSession({ route: route(), session: sessionId('hanging-close'), permissionMode: 'approval-required', signal: new AbortController().signal })
-    await expect(session.dispose()).resolves.toBeUndefined()
+    const disposal = session.dispose()
+    expect(session.dispose()).toBe(disposal)
+    await expect(disposal).resolves.toBeUndefined()
     expect(connection.isClosed).toBe(true)
   })
 
@@ -482,7 +487,7 @@ describe('Antigravity official ACP transport', () => {
       "const input = readline.createInterface({ input: process.stdin })",
       "for await (const line of input) {",
       "  const request = JSON.parse(line)",
-      "  if (request.method === 'initialize') { output({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: 'test' } } }) } else if (request.method === 'session/prompt') { process.stderr.write('Bearer secret-token' + String.fromCharCode(10)); output({ jsonrpc: '2.0', id: 9, method: 'session/request_permission', params: { sessionId: 'native', toolCall: { toolCallId: 'tool-1', title: 'native' }, options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] } }); output({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'transport-ok' } } } }); output({ jsonrpc: '2.0', id: request.id, result: { stopReason: 'end_turn' } }) } else if (request.method === 'session/cancel') { output({ jsonrpc: '2.0', id: request.id, result: null }) } }",
+      "  if (request.method === 'initialize') { output({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: 'test' } } }) } else if (request.method === 'session/prompt') { process.stderr.write('Bearer secret-'); setTimeout(() => process.stderr.write('token' + String.fromCharCode(10)), 5); output({ jsonrpc: '2.0', id: 9, method: 'session/request_permission', params: { sessionId: 'native', toolCall: { toolCallId: 'tool-1', title: 'native' }, options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] } }); output({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'transport-ok Open the following link to authenticate the ACP server: not-a-url' } } } }); output({ jsonrpc: '2.0', id: request.id, result: { stopReason: 'end_turn' } }) } else if (request.method === 'session/cancel') { output({ jsonrpc: '2.0', id: request.id, result: null }) } }",
 
 
 

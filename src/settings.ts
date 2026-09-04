@@ -1,10 +1,11 @@
+import type { ExternalAgentProviderInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import type { ExternalAgentSettingsEditor, ExternalAgentSettingsEditorSnapshot, ExternalAgentSettingsField, ExternalAgentSettingsStatus } from '@deepseek-ai/dsh-acp-provider/settings'
 import { AntigravityProvider } from './provider.js'
 import type { AntigravityHealth, AntigravityProviderConfig } from './types.js'
 
 /** Provider-specific Settings document; it contains paths, never credentials. */
 export interface AntigravitySettingsDocument {
-  readonly instanceId: string
+  readonly instanceId: ExternalAgentProviderInstanceId
   readonly executablePath: string
   readonly harnessPath: string
   readonly stateDirectory: string

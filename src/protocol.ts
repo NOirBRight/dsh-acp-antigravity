@@ -60,13 +60,11 @@ export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioA
     detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  let authPrelude = ''
   let authorizationState: string | undefined
   const emitAuthorization = (raw: string, strict: boolean): void => {
     if (options.onAuthorizationUrl === undefined || authorizationState !== undefined) return
-    authPrelude = (authPrelude + raw).slice(-16 * 1024 * 1024)
     let authorization: AntigravityAuthorizationRequest | null
-    try { authorization = parseAntigravityAuthPrelude(authPrelude) } catch (error) {
+    try { authorization = parseAntigravityAuthPrelude(raw) } catch (error) {
       if (strict) throw error
       return
     }
@@ -78,15 +76,15 @@ export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioA
     authorizationState = authorization.state
   }
   const guard = new LineBoundTransform(maxLineBytes, line => emitAuthorization(line, true))
-  child.stdout.pipe(guard)
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (chunk: string) => {
-    const raw = String(chunk)
-    try { options.onStderr?.(redactAntigravityText(raw)) } catch { /* Diagnostic callbacks cannot escape the EventEmitter path. */ }
-    emitAuthorization(raw, false)
+  const stderrGuard = new LineBoundTransform(maxLineBytes, undefined, line => {
+    try { options.onStderr?.(redactAntigravityText(line)) } catch { /* Diagnostic callbacks cannot escape the EventEmitter path. */ }
+    emitAuthorization(line + '\n', false)
   })
+  child.stdout.pipe(guard)
+  child.stderr.pipe(stderrGuard)
   const connection = new SdkAcpConnection(child, guard, cancelGraceMs)
   guard.once('error', error => connection.fail(error))
+  stderrGuard.once('error', error => connection.fail(error))
   child.once('error', error => connection.fail(error))
   child.once('exit', (code, signal) => connection.fail(new Error('Antigravity ACP process exited (' + String(code ?? signal ?? 'unknown') + ')')))
   return connection
@@ -185,10 +183,10 @@ class SdkAcpConnection implements AcpConnection {
   }
 }
 
-/** Bound complete newline-delimited JSON records before the SDK parses them. */
+/** Bound complete lines before forwarding protocol or diagnostic text. */
 class LineBoundTransform extends Transform {
   private pending = Buffer.alloc(0)
-  constructor(private readonly maxLineBytes: number, private readonly onPrelude?: (line: string) => void) { super() }
+  constructor(private readonly maxLineBytes: number, private readonly onPrelude?: (line: string) => void, private readonly onLine?: (line: string) => void) { super() }
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error) => void): void {
     this.pending = Buffer.concat([this.pending, chunk])
     while (true) {
@@ -198,16 +196,19 @@ class LineBoundTransform extends Transform {
       this.pending = this.pending.subarray(newline + 1)
       if (line.byteLength > this.maxLineBytes) { callback(new Error('ACP JSON line exceeds configured bound')); return }
       const text = line.toString('utf8')
-      if (text.includes(ANTIGRAVITY_AUTH_STDOUT_PREFIX)) {
-        try { this.onPrelude?.(text) } catch (error) { callback(error instanceof Error ? error : new Error('invalid ACP authentication prelude')); return }
-      } else this.push(Buffer.concat([line, Buffer.from([0x0a])]))
+      try {
+        if (this.onLine !== undefined) this.onLine(text)
+        else if (text.startsWith(ANTIGRAVITY_AUTH_STDOUT_PREFIX)) this.onPrelude?.(text)
+        else this.push(Buffer.concat([line, Buffer.from([0x0a])]))
+      } catch (error) { callback(error instanceof Error ? error : new Error('invalid ACP stream line')); return }
     }
     if (this.pending.byteLength > this.maxLineBytes) callback(new Error('ACP JSON line exceeds configured bound'))
     else callback()
   }
   override _flush(callback: (error?: Error) => void): void {
-    if (this.pending.byteLength > 0) callback(new Error('ACP stream ended with an incomplete JSON line'))
-    else callback()
+    if (this.pending.byteLength === 0) { callback(); return }
+    if (this.onLine === undefined) { callback(new Error('ACP stream ended with an incomplete JSON line')); return }
+    try { this.onLine(this.pending.toString('utf8')); callback() } catch (error) { callback(error instanceof Error ? error : new Error('invalid ACP stream line')) }
   }
 }
 

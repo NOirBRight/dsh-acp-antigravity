@@ -17,17 +17,17 @@ pnpm run build
 
 ## Configuration
 
-Configure the Antigravity ACP executable, its sibling localharness_external executable, and an isolated state directory. The provider does not search for alternate binaries or reuse ambient profiles. Profile clearing rejects symbolic links, and spawned processes omit ambient credential-like environment variables.
+Configure the Antigravity ACP executable, its sibling localharness_external executable, and an isolated state directory. The provider does not search for alternate binaries or reuse ambient profiles. Profile clearing atomically detaches its target and rejects symbolic links, and spawned processes omit ambient credential-like environment variables.
 
 ```ts
 import { AntigravityProvider } from "@deepseek-ai/dsh-acp-antigravity"
-import { ExternalAgentProviderRegistry } from "@deepseek-ai/dsh-acp-provider"
+import { ExternalAgentProviderRegistry, providerInstanceId } from "@deepseek-ai/dsh-acp-provider"
 
 const provider = new AntigravityProvider({
   executablePath: '/opt/antigravity/agy_acp_server',
   harnessPath: '/opt/antigravity/localharness_external',
   stateDirectory: '/var/lib/dsh/antigravity',
-  instanceId: 'default',
+  instanceId: providerInstanceId('default'),
   cancelGraceMs: 500,
 })
 const registry = new ExternalAgentProviderRegistry()

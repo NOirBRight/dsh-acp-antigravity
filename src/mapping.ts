@@ -27,30 +27,21 @@ export function mapPermissionMode(mode: ExternalAgentPermissionMode): Antigravit
 /** Return the modes advertised by this provider. */
 export function supportedPermissionModes(): readonly ExternalAgentPermissionMode[] { return ANTIGRAVITY_PERMISSION_MODES }
 
-/** Parse grouped or flat ACP model configuration options. */
+/** Parse only Antigravity's model select configuration. */
 export function parseAntigravityModels(value: unknown): readonly ExternalAgentModel[] {
+  const modelConfig = Array.isArray(value) ? value.find(candidate => isRecord(candidate) && candidate.id === 'model' && candidate.type === 'select') : undefined
+  const entries = isRecord(modelConfig) && Array.isArray(modelConfig.options)
+    ? modelConfig.options.flatMap(candidate => isRecord(candidate) && Array.isArray(candidate.options) ? candidate.options : [candidate])
+    : []
   const found = new Map<string, ExternalAgentModel>()
-  const visit = (candidate: unknown, depth: number): void => {
-    if (depth > 4 || found.size >= 256) return
-    if (Array.isArray(candidate)) {
-      for (const item of candidate) visit(item, depth + 1)
-      return
-    }
-    if (!isRecord(candidate)) return
-    const id = stringValue(candidate.value) ?? stringValue(candidate.modelId) ?? stringValue(candidate.id)
-    const name = stringValue(candidate.name) ?? stringValue(candidate.label) ?? id
+  for (const candidate of entries.slice(0, 256)) {
+    if (!isRecord(candidate)) continue
+    const id = stringValue(candidate.value)
+    const name = stringValue(candidate.name) ?? id
     const description = stringValue(candidate.description)
-    if (id && name && id !== 'model' && id !== 'mode' && id !== 'permission') {
-      found.set(id, { id: modelId(id), name, ...(description === undefined ? {} : { description }), supportedModes: supportedPermissionModes() })
-    }
-    for (const key of ['options', 'values', 'groups', 'configOptions']) {
-      const nested = candidate[key]
-      if (nested !== undefined) visit(nested, depth + 1)
-    }
+    if (id !== undefined && name !== undefined) found.set(id, { id: modelId(id), name, ...(description === undefined ? {} : { description }), supportedModes: supportedPermissionModes() })
   }
-  visit(value, 0)
-  const explicit = [...found.values()].filter(model => model.id !== modelId('mode') && model.id !== modelId('permission'))
-  return [{ id: modelId(ANTIGRAVITY_DEFAULT_MODEL), name: 'Account default', supportedModes: supportedPermissionModes() }, ...explicit.filter(model => model.id !== modelId(ANTIGRAVITY_DEFAULT_MODEL))]
+  return [{ id: modelId(ANTIGRAVITY_DEFAULT_MODEL), name: 'Account default', supportedModes: supportedPermissionModes() }, ...found.values()].filter((model, index) => index === 0 || model.id !== modelId(ANTIGRAVITY_DEFAULT_MODEL))
 }
 
 /** Resolve a saved model without substituting another account model. */
@@ -106,7 +97,7 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
     const input = stringifyPayload(update.rawInput ?? update.input)
     const output = stringifyPayload(update.rawOutput ?? update.output)
     const error = stringValue(update.error)
-    const locations = Array.isArray(update.locations) ? update.locations.filter((location): location is string => typeof location === 'string') : undefined
+    const locations = Array.isArray(update.locations) ? update.locations.map(normalizeToolLocation).filter(location => location !== undefined) : undefined
     return boundExternalAgentEvent({
       type: 'tool-activity', toolId: toolId(nativeToolId), name, status,
       ...(input === undefined ? {} : { input }),
@@ -129,6 +120,14 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
   if (tag === 'current_mode_update' || tag === 'config_option_update' || tag === 'session_info_update') return { type: 'notice', level: 'info', message: 'Antigravity session configuration updated' }
   if (tag === 'user_message_chunk') return null
   return null
+}
+
+function normalizeToolLocation(value: unknown): { readonly path: string; readonly line?: number } | undefined {
+  if (typeof value === 'string') return value.length === 0 ? undefined : { path: value }
+  if (!isRecord(value)) return undefined
+  const path = stringValue(value.path)
+  const line = typeof value.line === 'number' && Number.isInteger(value.line) && value.line >= 0 && value.line <= 0xffff_ffff ? value.line : undefined
+  return path === undefined ? undefined : { path, ...(line === undefined ? {} : { line }) }
 }
 
 function extractText(value: unknown): string | undefined {

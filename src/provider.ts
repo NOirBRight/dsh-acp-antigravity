@@ -9,7 +9,7 @@ import {
   type ExternalAgentSession,
 } from '@deepseek-ai/dsh-acp-provider'
 import { isAbsolute } from 'node:path'
-import { antigravitySignInRequiredMessage, clearAntigravityProfile, redactAntigravityText } from './auth.js'
+import { antigravitySignInRequiredMessage, clearAntigravityProfile, redactAntigravityText, resolveAntigravityProfileDirectory } from './auth.js'
 import { errorMessage, isRecord } from './decode.js'
 import { buildAntigravityLaunchSpec, type AntigravityLaunchSpec, validateAntigravityInstallation, type AntigravityInstallationProbe } from './installation.js'
 import { mapPermissionMode, parseAntigravityModels, resolveAntigravityModel, validateAntigravityIdentity } from './mapping.js'
@@ -25,7 +25,7 @@ import {
   type AntigravityProviderConfig,
 } from './types.js'
 
-/** Dependencies that keep process, filesystem and audit seams injectable. */
+/** Dependencies that keep installation, process, and OAuth notification seams injectable. */
 export interface AntigravityProviderDependencies {
   readonly cwd?: string
   readonly installationProbe?: AntigravityInstallationProbe
@@ -37,6 +37,7 @@ export interface AntigravityProviderDependencies {
 /** Provider-owned Antigravity ACP implementation. */
 export class AntigravityProvider implements ExternalAgentProvider {
   readonly info
+  private readonly profileDirectory: string
   private identity: AntigravityIdentity | undefined
   private status: AntigravityHealth
   private disposed = false
@@ -48,9 +49,10 @@ export class AntigravityProvider implements ExternalAgentProvider {
     for (const [name, value] of [['maxEventTextBytes', config.maxEventTextBytes], ['maxEventPayloadBytes', config.maxEventPayloadBytes], ['cancelGraceMs', config.cancelGraceMs]] as const) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new RangeError(name + ' must be a positive safe integer')
     }
+    this.profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
     const providerName = config.instanceId === 'default' ? 'antigravity' : 'antigravity:' + config.instanceId
     this.info = { id: providerId(providerName), name: 'Antigravity', description: 'Google Antigravity ACP external agent' }
-    this.status = { status: 'missing-installation', profileDirectory: config.stateDirectory }
+    this.status = { status: 'missing-installation', profileDirectory: this.profileDirectory }
   }
 
   /** Value-free installation and protocol health for Settings. */
@@ -68,7 +70,8 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const response = await connection.request('session/new', { cwd, mcpServers: [] }, signal)
       const models = modelsFromSessionResponse(response)
       await closeNativeSession(connection, response, signal)
-      this.status = { status: 'ready', profileDirectory: this.config.stateDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: this.config.model ?? ANTIGRAVITY_DEFAULT_MODEL }
+      this.assertActive()
+      this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: this.config.model ?? ANTIGRAVITY_DEFAULT_MODEL }
       return models
     } catch (error) {
       this.setFailureStatus(error)
@@ -99,15 +102,19 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const rawSession = new AntigravitySession(connection, this.info.id, request.session, native, this.config, filesystem)
       const session = new ManagedExternalAgentSession(rawSession)
       this.sessions.add(session)
+      let disposal: Promise<void> | undefined
       const trackedSession: ExternalAgentSession = {
         ref: session.ref,
         supportedModes: session.supportedModes,
         runTurn: (turnRequest, turnHost) => session.runTurn(turnRequest, turnHost),
-        dispose: async () => { try { await session.dispose() } finally { this.sessions.delete(session) } },
+        dispose: () => {
+          disposal ??= session.dispose().finally(() => { this.sessions.delete(session) })
+          return disposal
+        },
       }
       this.connections.delete(connection)
       connection = undefined
-      this.status = { status: 'ready', profileDirectory: this.config.stateDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: String(selectedModel.id) }
+      this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: String(selectedModel.id) }
       return trackedSession
     } catch (error) {
       await this.closeConnection(connection)
@@ -130,8 +137,9 @@ export class AntigravityProvider implements ExternalAgentProvider {
   }
 
   private setFailureStatus(error: unknown): void {
+    if (this.disposed) return
     const authenticationRequired = isAuthenticationError(error)
-    this.status = { status: authenticationRequired ? 'authentication-required' : 'error', profileDirectory: this.config.stateDirectory, message: authenticationRequired ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
+    this.status = { status: authenticationRequired ? 'authentication-required' : 'error', profileDirectory: this.profileDirectory, message: authenticationRequired ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
   }
 
   private assertActive(): void {
@@ -140,16 +148,16 @@ export class AntigravityProvider implements ExternalAgentProvider {
 
   private async closeConnection(connection: AcpConnection | undefined): Promise<void> {
     if (connection === undefined) return
-    this.connections.delete(connection)
-    await connection.close()
+    try { await connection.close() } finally { this.connections.delete(connection) }
   }
 
   /** Validate the executable pair and negotiate ACP identity for Settings. */
   async validateInstallation(): Promise<Awaited<ReturnType<typeof validateAntigravityInstallation>>> {
     this.assertActive()
     const result = await validateAntigravityInstallation(this.config, this.dependencies.installationProbe)
+    this.assertActive()
     if ('status' in result) {
-      this.status = { status: result.status, profileDirectory: this.config.stateDirectory, message: result.message }
+      this.status = { status: result.status, profileDirectory: this.profileDirectory, message: result.message }
       return result
     }
     let connection: AcpConnection | undefined
@@ -157,7 +165,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       connection = await this.startConnection(this.workingDirectory())
       const version = this.identity?.agentVersion ?? result.version
       const model = this.status.model
-      this.status = { status: this.status.status === 'ready' ? 'ready' : 'authentication-required', profileDirectory: this.config.stateDirectory, ...(version === undefined ? {} : { version }), ...(model === undefined ? {} : { model }) }
+      this.status = { status: this.status.status === 'ready' ? 'ready' : 'authentication-required', profileDirectory: this.profileDirectory, ...(version === undefined ? {} : { version }), ...(model === undefined ? {} : { model }) }
       return { ...result, ...(version === undefined ? {} : { version }) }
     } catch (error) {
       this.setFailureStatus(error)
@@ -175,7 +183,8 @@ export class AntigravityProvider implements ExternalAgentProvider {
     try {
       if (!await this.authenticateIfConfigured(connection, signal)) throw new Error('Antigravity ACP does not expose personal OAuth authentication')
       if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
-      this.status = { status: 'ready', profileDirectory: this.config.stateDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), ...(this.status.model === undefined ? {} : { model: this.status.model }) }
+      this.assertActive()
+      this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), ...(this.status.model === undefined ? {} : { model: this.status.model }) }
     } catch (error) {
       this.setFailureStatus(error)
       throw error
@@ -196,8 +205,10 @@ export class AntigravityProvider implements ExternalAgentProvider {
     } finally {
       await this.closeConnection(connection)
     }
+    this.assertActive()
     await clearAntigravityProfile(this.config)
-    this.status = { status: 'authentication-required', profileDirectory: this.config.stateDirectory, message: 'Antigravity account signed out.' }
+    this.assertActive()
+    this.status = { status: 'authentication-required', profileDirectory: this.profileDirectory, message: 'Antigravity account signed out.' }
   }
 
   private workingDirectory(workspaceRoot?: string): string {
@@ -234,7 +245,9 @@ export class AntigravityProvider implements ExternalAgentProvider {
         clientCapabilities: antigravityClientCapabilities(filesystem),
         clientInfo: { name: this.config.clientName ?? 'dsh-acp-antigravity', version: this.config.clientVersion ?? '0.1.0' },
       }, signal)
-      this.identity = validateAntigravityIdentity(response)
+      const identity = validateAntigravityIdentity(response)
+      this.assertActive()
+      this.identity = identity
       return connection
     } catch (error) {
       await this.closeConnection(connection)

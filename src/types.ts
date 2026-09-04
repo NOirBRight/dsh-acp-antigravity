@@ -15,6 +15,7 @@ import type {
   ExternalAgentUserInputAnswers,
   ExternalAgentUserInputRequest,
   ExternalAgentPermissionMode,
+  ExternalAgentProviderInstanceId,
 } from '@deepseek-ai/dsh-acp-provider'
 
 /** Official Antigravity native permission mode values. */
@@ -34,7 +35,7 @@ export interface AntigravityInstallationConfig {
   readonly executablePath: string
   readonly harnessPath: string
   readonly stateDirectory: string
-  readonly instanceId: string
+  readonly instanceId: ExternalAgentProviderInstanceId
   readonly platform?: NodeJS.Platform
 }
 

@@ -1,18 +1,18 @@
-import { HostExpiredError, TurnAbortedError, UnscopedAllowAlwaysError, optionId, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
+import { HostExpiredError, TurnAbortedError, UnscopedAllowAlwaysError, boundExternalAgentUserInputRequest, optionId, type ExternalAgentEventBounds, type ExternalAgentPermissionRequest, type ExternalAgentTurnHost, type ExternalAgentUserInputRequest } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import { createAntigravityFilesystemHandler } from './filesystem.js'
 import type { AcpRequestHandler } from './protocol.js'
 import type { AntigravityClientFilesystem } from './types.js'
 
 /** Build ACP server-request handling from one turn-scoped DSH host. */
-export function createAntigravityInteractionHandler(host: ExternalAgentTurnHost, filesystem?: AntigravityClientFilesystem): AcpRequestHandler {
+export function createAntigravityInteractionHandler(host: ExternalAgentTurnHost, filesystem?: AntigravityClientFilesystem, bounds?: ExternalAgentEventBounds): AcpRequestHandler {
   const fileHandler = filesystem === undefined ? undefined : createAntigravityFilesystemHandler(filesystem, host.signal)
   let sequence = 0
   return async (method, params, id) => {
     const currentSequence = ++sequence
     const requestKey = interactionRequestId(params, id, currentSequence)
     if (method === 'session/request_permission') {
-      if (isInteractionQuestion(params)) return handleInteractionQuestion(host, params, String(id) + ':' + String(currentSequence))
+      if (isInteractionQuestion(params)) return handleInteractionQuestion(host, params, String(id) + ':' + String(currentSequence), bounds)
       return handlePermission(host, params, requestKey)
     }
     if (method === 'session/request_user_input' || method === 'elicitation/create') return questionResponse(await host.requestUserInput(parseQuestionRequest(params, requestKey)))
@@ -33,7 +33,7 @@ function isInteractionQuestion(params: unknown): boolean {
   return stringValue(params.toolCall.toolCallId)?.startsWith('interaction_') === true
 }
 
-async function handleInteractionQuestion(host: ExternalAgentTurnHost, params: unknown, id: string): Promise<unknown> {
+async function handleInteractionQuestion(host: ExternalAgentTurnHost, params: unknown, id: string, bounds: ExternalAgentEventBounds | undefined): Promise<unknown> {
   if (!isRecord(params) || !isRecord(params.toolCall) || !Array.isArray(params.options) || params.options.length === 0) throw new Error('Antigravity user question is malformed')
   const options = params.options.map(value => {
     if (!isRecord(value)) throw new Error('Antigravity user question option is malformed')
@@ -42,16 +42,18 @@ async function handleInteractionQuestion(host: ExternalAgentTurnHost, params: un
     return { native, label: stringValue(value.name)?.trim() || native }
   })
   if (new Set(options.map(option => option.native)).size !== options.length) throw new Error('Antigravity user question option IDs must be unique')
+  const rawRequest: ExternalAgentUserInputRequest = { requestId: optionId(id), question: stringValue(params.toolCall.title)?.trim() || 'Choose an option.', options: options.map(option => option.label), multiple: false }
+  const request = bounds === undefined ? rawRequest : boundExternalAgentUserInputRequest(rawRequest, bounds)
   let answer: Awaited<ReturnType<ExternalAgentTurnHost['requestUserInput']>>
   try {
-    answer = await host.requestUserInput({ requestId: optionId(id), question: stringValue(params.toolCall.title)?.trim() || 'Choose an option.', options: options.map(option => option.label), multiple: false })
+    answer = await host.requestUserInput(request)
   } catch (error) {
     if (isInteractionAbort(error)) return { outcome: { outcome: 'cancelled' } }
     throw error
   }
   if (answer.answers.length !== 1) return { outcome: { outcome: 'cancelled' } }
   const exact = options.find(option => option.native === answer.answers[0])
-  const matchingLabels = options.filter(option => option.label === answer.answers[0])
+  const matchingLabels = options.filter((_option, index) => request.options?.[index] === answer.answers[0])
   const selected = exact ?? (matchingLabels.length === 1 ? matchingLabels[0] : undefined)
   if (selected === undefined) throw new Error('Antigravity user question answer is unavailable')
   return { outcome: { outcome: 'selected', optionId: selected.native } }

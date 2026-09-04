@@ -28,6 +28,7 @@ export class AntigravitySession implements ExternalAgentSession {
   private readonly nativeSession: ExternalAgentSessionId
   private active = false
   private disposed = false
+  private disposePromise: Promise<void> | undefined
 
   constructor(private readonly connection: AcpConnection, provider: ExternalAgentProvider['info']['id'], session: ExternalAgentOpenRequest['session'], private readonly nativeId: string, private readonly config: AntigravityProviderConfig, private readonly filesystem?: AntigravityClientFilesystem) {
     this.nativeSession = sessionId(nativeId)
@@ -48,7 +49,7 @@ export class AntigravitySession implements ExternalAgentSession {
     const maxTextBytes = this.config.maxEventTextBytes ?? 1024 * 1024
     const bounds: ExternalAgentEventBounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
     const boundedHost = withBoundedExternalAgentHost(host, bounds)
-    const handler = createAntigravityInteractionHandler(boundedHost, this.filesystem)
+    const handler = createAntigravityInteractionHandler(boundedHost, this.filesystem, bounds)
     this.connection.setRequestHandler(handler)
     this.connection.setNotificationHandler((method, params) => {
       if (method !== 'session/update' || protocolFailure !== undefined) return
@@ -96,12 +97,15 @@ export class AntigravitySession implements ExternalAgentSession {
   }
 
   /** Close the ACP transport; closing is the native allow-always revocation mechanism. */
-  async dispose(): Promise<void> {
-    if (this.disposed) return
+  dispose(): Promise<void> {
+    if (this.disposePromise !== undefined) return this.disposePromise
     this.disposed = true
-    const signal = AbortSignal.timeout(this.config.cancelGraceMs ?? 500)
-    try { await this.connection.request('session/close', { sessionId: this.nativeId }, signal) } catch { /* Timeout or an already-ended session must not block transport teardown. */ }
-    await this.connection.close()
+    this.disposePromise = (async () => {
+      const signal = AbortSignal.timeout(this.config.cancelGraceMs ?? 500)
+      try { await this.connection.request('session/close', { sessionId: this.nativeId }, signal) } catch { /* Timeout or an already-ended session must not block transport teardown. */ }
+      await this.connection.close()
+    })()
+    return this.disposePromise
   }
 }
 
