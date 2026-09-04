@@ -29,7 +29,7 @@ function textOf(value: unknown): string {
   return ''
 }
 
-export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvider | undefined): {
+export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvider | undefined, getCachedModels?: () => readonly { id: string; name: string }[]): {
   providerInfo(provider: string): { id: string; name: string }
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
   resolveModel(provider: string, model: string): Promise<{ provider: string; id: string; name: string }>
@@ -40,14 +40,8 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
   return {
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
     listModels: async provider => {
-      const installed = getProvider()
-      if (installed === undefined) return []
-      try {
-        const models = await installed.listModels()
-        return models.map(model => ({ provider, id: String(model.id), name: model.name }))
-      } catch {
-        return []
-      }
+      const cached = getCachedModels?.() ?? []
+      return cached.map(model => ({ provider, id: model.id, name: model.name }))
     },
     resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
     stream: async function* (options) {

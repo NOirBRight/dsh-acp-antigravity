@@ -14,7 +14,6 @@ import {
   decodeSnapshot,
   type AcpSettingsRow,
 } from '../client-contract.ts'
-import { fetchExternalCatalog, overlayDirectory, type OverlayDirectory } from './catalog-overlay.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 
@@ -63,18 +62,6 @@ export function apply(ctx: ClientContext): void {
     const path = (result.value as { path?: string | null }).path
     return path ?? null
   }
-  if (typeof ctx.inject === 'function') ctx.inject(['modelDirectories'], (scope: ClientContext & { modelDirectories: { directoryFor: (id: unknown) => OverlayDirectory } }) => {
-    const orig = scope.modelDirectories.directoryFor.bind(scope.modelDirectories)
-    const patched = new WeakSet<object>()
-    scope.modelDirectories.directoryFor = (id: unknown) => {
-      const inner = orig(id)
-      if (!patched.has(inner)) {
-        overlayDirectory(inner, () => fetchExternalCatalog(rpc))
-        patched.add(inner)
-      }
-      return inner
-    }
-  })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'external-agents',
