@@ -31,4 +31,14 @@ describe('Antigravity LLM bridge', () => {
     expect(chunks.some(chunk => typeof chunk === 'object' && chunk !== null && 'text' in chunk && (chunk as { text: string }).text === 'ok-ping')).toBe(true)
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: 'stop' })
   })
+
+  it('exposes the full staging LlmAdapter surface including prepareCall', async () => {
+    const adapter = createAntigravityLlmBridge(() => undefined)
+    for (const method of ['providerInfo', 'providerRetryPolicy', 'imageRequestPricing', 'listModels', 'resolveModel', 'prepareCall', 'stream'] as const) {
+      expect(typeof adapter[method]).toBe('function')
+    }
+    const prepared = await adapter.prepareCall('antigravity', 'gemini-3.8-flash')
+    expect(prepared.model).toEqual({ provider: 'antigravity', id: 'gemini-3.8-flash', name: 'gemini-3.8-flash' })
+    expect(typeof prepared.stream).toBe('function')
+  })
 })

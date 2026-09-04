@@ -32,8 +32,10 @@ function textOf(value: unknown): string {
 export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvider | undefined, getCachedModels?: () => readonly { id: string; name: string }[], setCachedModels?: (models: readonly { id: string; name: string }[]) => void): {
   providerInfo(provider: string): { id: string; name: string }
   providerRetryPolicy(_provider: string): undefined
+  imageRequestPricing(_provider: string, _model: string): undefined
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
-  resolveModel(provider: string, model: string): Promise<{ provider: string; id: string; name: string }>
+  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<{ provider: string; id: string; name: string }>
+  prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: { provider: string; id: string; name: string }; stream: (options: { provider: string; model: string; messages: readonly unknown[]; signal?: AbortSignal; sessionId?: string }) => AsyncIterable<{ type: string; [key: string]: unknown }> }>
   stream(options: { provider: string; model: string; messages: readonly unknown[]; signal?: AbortSignal; sessionId?: string }): AsyncIterable<{ type: string; [key: string]: unknown }>
 } {
   const sessions = new Map<string, ExternalAgentSession>()
@@ -41,6 +43,7 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
   return {
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
     providerRetryPolicy: () => undefined,
+    imageRequestPricing: () => undefined,
     listModels: async provider => {
       const cached = getCachedModels?.() ?? []
       if (cached.length > 0) return cached.map(model => ({ provider, id: model.id, name: model.name }))
@@ -56,6 +59,12 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
       }
     },
     resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+    async prepareCall(provider, model, signal) {
+      return {
+        model: await this.resolveModel(provider, model, signal),
+        stream: options => this.stream(options),
+      }
+    },
     stream: async function* (options) {
       const installed = getProvider()
       if (installed === undefined) throw new Error('Antigravity is not configured')
