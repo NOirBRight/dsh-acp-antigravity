@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { openDefaultBrowser } from './browser.js'
+import { createAntigravityLlmBridge } from './llm-bridge.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
@@ -25,6 +26,7 @@ export interface DshPluginConfig {
 /** Host context used by the Settings RPC plugin. */
 export interface DshPluginContext {
   effect(fn: () => unknown, name?: string): void
+  inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => void): void
   connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
 }
 
@@ -118,6 +120,12 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   }
 
   await mount(live)
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
+      const adapter = createAntigravityLlmBridge(() => installed?.provider)
+      scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
+    })
+  }
   registerAcpSettingsRpc(ctx, {
     snapshot,
     catalog: async () => {
