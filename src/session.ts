@@ -35,6 +35,12 @@ export class AntigravitySession implements ExternalAgentSession {
     this.ref = { provider, session, nativeSession: this.nativeSession, resumeCursor: resumeCursor(provider, nativeId) }
   }
 
+  async configure(model: string, permissionMode: ExternalAgentTurnRequest['permissionMode'], signal?: AbortSignal): Promise<void> {
+    if (this.disposed) throw new Error('Antigravity session is disposed')
+    if (model !== 'default') await this.connection.request('session/set_config_option', { sessionId: this.nativeId, configId: 'model', value: model }, signal)
+    await this.connection.request('session/set_mode', { sessionId: this.nativeId, modeId: mapPermissionMode(permissionMode) }, signal)
+  }
+
   /** Send one prompt; native tools remain owned by ACP and are only published as activity. */
   async runTurn(request: ExternalAgentTurnRequest, host: ExternalAgentTurnHost): Promise<ExternalAgentTurnResult> {
     if (this.disposed) throw new Error('Antigravity session is disposed')

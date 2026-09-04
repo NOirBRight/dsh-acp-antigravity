@@ -103,9 +103,10 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const session = new ManagedExternalAgentSession(rawSession)
       this.sessions.add(session)
       let disposal: Promise<void> | undefined
-      const trackedSession: ExternalAgentSession = {
+      const trackedSession: ExternalAgentSession & { configure: typeof rawSession.configure } = {
         ref: session.ref,
         supportedModes: session.supportedModes,
+        configure: (model, mode, signal) => rawSession.configure(model, mode, signal),
         runTurn: (turnRequest, turnHost) => session.runTurn(turnRequest, turnHost),
         dispose: () => {
           disposal ??= session.dispose().finally(() => { this.sessions.delete(session) })

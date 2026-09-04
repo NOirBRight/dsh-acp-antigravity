@@ -64,9 +64,12 @@ export function acpPrompt(messages: readonly unknown[]): string {
 }
 
 export function permissionModeFromMessages(messages: readonly unknown[]): 'approval-required' | 'auto-accept-edits' | 'full-access' {
-  const blob = messages.map(message => textOf(message)).join(String.fromCharCode(10)).toLowerCase()
-  if (blob.includes('danger-full-access') || blob.includes('approval policy: never')) return 'full-access'
-  if (blob.includes('read-only')) return 'approval-required'
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const blob = textOf(messages[i]).toLowerCase()
+    if (blob.includes('danger-full-access')) return 'full-access'
+    if (blob.includes('read-only')) return 'approval-required'
+    if (blob.includes('workspace-write')) return 'auto-accept-edits'
+  }
   return 'auto-accept-edits'
 }
 
@@ -220,6 +223,7 @@ export function createAntigravityLlmBridge(
         if (installed === undefined) throw new Error('Antigravity is not configured')
         const key = options.sessionId ?? 'default'
         const permissionMode = permissionModeFromMessages(options.messages)
+        const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
         const natives = await nativeModels()
         const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
         const workspaceRoot = workspaceRootFromMessages(options.messages)
@@ -228,12 +232,14 @@ export function createAntigravityLlmBridge(
           session = await installed.openSession({
             route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
             session: sessionId(key),
-            permissionMode,
+            permissionMode: openMode,
             ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
             ...(options.signal === undefined ? {} : { signal: options.signal }),
           })
           sessions.set(key, session)
         }
+        const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
+        if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
         const pending: { kind: 'thought' | 'text'; text: string }[] = []
         let sawPlan = false
         let wake: (() => void) | undefined
