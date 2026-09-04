@@ -1,6 +1,7 @@
 import {
   boundExternalAgentEvent,
   modelId,
+  toolId,
   type ExternalAgentEvent,
   type ExternalAgentModel,
   type ExternalAgentPermissionMode,
@@ -71,13 +72,13 @@ export function validateAntigravityIdentity(response: unknown): AntigravityIdent
   const capabilities = response.agentCapabilities
   const sessionCapabilities = isRecord(capabilities.sessionCapabilities) ? capabilities.sessionCapabilities : {}
   const resumeMethod: 'resume' | 'load' | undefined = sessionCapabilities.resume === true || isRecord(sessionCapabilities.resume) || capabilities.sessionResume === true || capabilities.resumeSession === true ? 'resume' : capabilities.loadSession === true ? 'load' : undefined
-  const supportsResume = resumeMethod !== undefined
+  if (resumeMethod === undefined) throw new Error('Antigravity ACP session resume capability is missing')
   return {
     protocolVersion: 1,
     agentName,
     ...(agentVersion === undefined ? {} : { agentVersion }),
-    supportsResume,
-    ...(resumeMethod === undefined ? {} : { resumeMethod }),
+    supportsResume: true,
+    resumeMethod,
   }
 }
 
@@ -97,16 +98,16 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: { rea
     return boundExternalAgentEvent({ type: 'thought-delta', text }, bounds)
   }
   if (tag === 'tool_call' || tag === 'tool_call_update') {
-    const toolId = stringValue(update.toolCallId) ?? stringValue(update.tool_call_id) ?? stringValue(update.id)
+    const nativeToolId = stringValue(update.toolCallId) ?? stringValue(update.tool_call_id) ?? stringValue(update.id)
     const name = stringValue(update.title) ?? stringValue(update.name) ?? 'native tool'
-    if (!toolId) throw new Error('Antigravity tool update has no id')
+    if (!nativeToolId) throw new Error('Antigravity tool update has no id')
     const status = normalizeToolStatus(update.status ?? update.state)
     const input = stringifyPayload(update.rawInput ?? update.input)
     const output = stringifyPayload(update.rawOutput ?? update.output)
     const error = stringValue(update.error)
     const locations = Array.isArray(update.locations) ? update.locations.filter((location): location is string => typeof location === 'string') : undefined
     return boundExternalAgentEvent({
-      type: 'tool-activity', toolId, name, status,
+      type: 'tool-activity', toolId: toolId(nativeToolId), name, status,
       ...(input === undefined ? {} : { input }),
       ...(output === undefined ? {} : { output }),
       ...(error === undefined ? {} : { error }),

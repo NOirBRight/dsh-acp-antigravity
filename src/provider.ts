@@ -1,5 +1,6 @@
 import {
   ManagedExternalAgentSession,
+  consumeExternalAgentOpenAuthorization,
   providerId,
   type ExternalAgentFilesystem,
   type ExternalAgentModel,
@@ -79,6 +80,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
   /** Open one ACP native session for the exact route and permission mode. */
   async openSession(request: ExternalAgentOpenRequest): Promise<ExternalAgentSession> {
     this.assertActive()
+    consumeExternalAgentOpenAuthorization(request)
     if (request.route.kind !== 'external-agent' || request.route.provider !== this.info.id) throw new Error('Antigravity received a route for another provider')
     if (request.signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
     const cwd = this.workingDirectory(request.workspaceRoot)
@@ -92,6 +94,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const native = request.resumeCursor?.value ?? nativeSessionId(response)
       if (String(selectedModel.id) !== ANTIGRAVITY_DEFAULT_MODEL) await connection.request('session/set_config_option', { sessionId: native, configId: 'model', value: String(selectedModel.id) }, request.signal)
       await connection.request('session/set_mode', { sessionId: native, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
+      this.assertActive()
       const rawSession = new AntigravitySession(connection, this.info.id, request.session, native, this.config, filesystem)
       const session = new ManagedExternalAgentSession(rawSession)
       this.sessions.add(session)
@@ -150,6 +153,9 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const model = this.status.model
       this.status = { status: this.status.status === 'ready' ? 'ready' : 'authentication-required', profileDirectory: this.config.stateDirectory, ...(version === undefined ? {} : { version }), ...(model === undefined ? {} : { model }) }
       return { ...result, ...(version === undefined ? {} : { version }) }
+    } catch (error) {
+      this.setFailureStatus(error)
+      throw error
     } finally {
       if (connection !== undefined) this.connections.delete(connection)
       await connection?.close()

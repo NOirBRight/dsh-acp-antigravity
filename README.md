@@ -6,6 +6,8 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 
 ## Install and verify
 
+A source checkout expects dsh-acp-provider in the sibling ../dsh-acp-provider directory. Published installs satisfy it as a peer dependency.
+
 ```sh
 pnpm install
 pnpm run typecheck
@@ -15,7 +17,7 @@ pnpm run build
 
 ## Configuration
 
-Configure the Antigravity ACP executable, its sibling localharness_external executable, and an isolated state directory. The provider does not search for alternate binaries or reuse ambient profiles.
+Configure the Antigravity ACP executable, its sibling localharness_external executable, and an isolated state directory. The provider does not search for alternate binaries or reuse ambient profiles. Profile clearing rejects symbolic links, and spawned processes omit ambient credential-like environment variables.
 
 ```ts
 import { AntigravityProvider } from "@deepseek-ai/dsh-acp-antigravity"
@@ -44,7 +46,7 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 
 ## Session behavior
 
-- The provider accepts approval-required, auto-accept-edits, and full-access modes and applies the native mode before each prompt.
+- The provider requires negotiated native resume support, accepts approval-required, auto-accept-edits, and full-access modes, and applies the native mode before each prompt.
 - The provider registry confirms and audits full access once before ACP startup.
 - Native permission option IDs are preserved exactly; allow_always is accepted only with a native session or thread scope.
 - Native tool activity is published as activity and is never re-executed by DSH. Malformed updates fail and cancel the active turn without exposing their raw payload.

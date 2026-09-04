@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { ExternalAgentProviderRegistry, TurnAbortedError, createSessionModelRoute, optionId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import {
   antigravityClientCapabilities,
@@ -6,6 +9,7 @@ import {
   ANTIGRAVITY_PERMISSION_MODES,
   AntigravityProvider,
   buildAntigravityEnvironment,
+  clearAntigravityProfile,
   createAntigravityFilesystemHandler,
   createAntigravityInteractionHandler,
   createAntigravitySettingsEditor,
@@ -24,11 +28,13 @@ import { spawnAntigravityAcp, type AcpConnection, type AcpRequestHandler, type A
 
 interface FakeConnectionOptions {
   readonly authenticationAvailable?: boolean
+  readonly initializeResponse?: unknown
   readonly updates?: readonly unknown[]
   readonly promptResponse?: unknown
   readonly updateSessionId?: string
   readonly agentRequests?: readonly { readonly method: string; readonly params: unknown }[]
   readonly hangClose?: boolean
+  readonly onSetMode?: () => Promise<void>
 }
 
 class FakeConnection implements AcpConnection {
@@ -41,14 +47,15 @@ class FakeConnection implements AcpConnection {
 
   async request(method: string, params?: unknown, signal?: AbortSignal): Promise<unknown> {
     this.calls.push({ method, params })
-    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionCapabilities: { resume: {} } } }
+    if (method === 'initialize') return this.options.initializeResponse ?? { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionCapabilities: { resume: {} } } }
     if (method === 'authenticate') {
       if (this.options.authenticationAvailable === false) throw new Error('method not found')
       return {}
     }
     if (method === 'session/new') return { sessionId: 'native-1', configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
     if (method === 'session/resume' || method === 'session/load') return { configOptions: [{ id: 'model', name: 'Model', type: 'select', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }
-    if (method === 'session/set_config_option' || method === 'session/set_mode') return {}
+    if (method === 'session/set_config_option') return {}
+    if (method === 'session/set_mode') { await this.options.onSetMode?.(); return {} }
     if (method === 'session/close' && this.options.hangClose === true) return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
     if (method === 'session/prompt') {
       const updates = this.options.updates ?? [
@@ -109,11 +116,12 @@ describe('Antigravity mapping and safety', () => {
   })
 
   it('validates protocol identity and rejects another ACP executable', () => {
-    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1' }, agentCapabilities: {} })).toMatchObject({ agentName: 'antigravity-acp', supportsResume: false })
+    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1' }, agentCapabilities: { sessionCapabilities: { resume: {} } } })).toMatchObject({ agentName: 'antigravity-acp', supportsResume: true, resumeMethod: 'resume' })
+    expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: {} })).toThrow(/resume capability/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'Other Agent' } })).toThrow(/not antigravity-acp/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 2, agentInfo: { name: 'antigravity-acp' } })).toThrow(/version/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' } })).toThrow(/capabilities/)
-    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: { sessionCapabilities: { resume: false } } }).supportsResume).toBe(false)
+    expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: { sessionCapabilities: { resume: false } } })).toThrow(/resume capability/)
   })
 
   it('derives allow-always scope from the native session request', async () => {
@@ -152,12 +160,27 @@ describe('Antigravity mapping and safety', () => {
 
   it('isolates profiles and strips ambient Google credentials from process env', () => {
     expect(resolveAntigravityProfileDirectory('/tmp/dsh', 'a')).not.toBe(resolveAntigravityProfileDirectory('/tmp/dsh', 'b'))
-    const env = buildAntigravityEnvironment({ baseEnv: { PATH: '/bin', GOOGLE_API_KEY: 'secret', GEMINI_API_KEY: 'secret2' }, profileDirectory: '/tmp/profile', harnessPath: '/tmp/harness' })
+    const env = buildAntigravityEnvironment({ baseEnv: { PATH: '/bin', GOOGLE_API_KEY: 'secret', GEMINI_API_KEY: 'secret2', UNRELATED_TOKEN: 'secret3' }, profileDirectory: '/tmp/profile', harnessPath: '/tmp/harness' })
     expect(env.PATH).toBe('/bin')
     expect(env.GOOGLE_API_KEY).toBeUndefined()
+    expect(env.UNRELATED_TOKEN).toBeUndefined()
     expect(env.GEMINI_API_KEY).toBeUndefined()
     expect(env.GEMINI_HOME).toBe('/tmp/profile')
     expect(env.ANTIGRAVITY_HARNESS_PATH).toBe('/tmp/harness')
+  })
+
+  it('refuses to recursively remove a symlinked profile', async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), 'agy-profile-'))
+    const profile = resolveAntigravityProfileDirectory(stateDirectory, 'linked')
+    const target = await mkdtemp(join(tmpdir(), 'agy-target-'))
+    try {
+      await mkdir(dirname(profile), { recursive: true })
+      await symlink(target, profile, 'dir')
+      await expect(clearAntigravityProfile({ ...config(), stateDirectory, instanceId: 'linked' })).rejects.toThrow(/symbolic link/)
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true })
+      await rm(target, { recursive: true, force: true })
+    }
   })
 })
 
@@ -277,6 +300,12 @@ describe('Antigravity provider lifecycle', () => {
     await session.dispose()
   })
 
+  it('reports protocol validation failures through provider health', async () => {
+    const provider = new AntigravityProvider(config(), { installationProbe: { stat: async () => ({ isFile: true, mode: 0o755 }) }, launchSpec: async () => launchSpec(), connectionFactory: () => new FakeConnection({ initializeResponse: { protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: {} } }) })
+    await expect(provider.validateInstallation()).rejects.toThrow(/resume capability/)
+    expect(provider.health).toMatchObject({ status: 'error' })
+  })
+
   it('shows the negotiated version and native-terminal scope in Settings', async () => {
     const provider = new AntigravityProvider(config(), {
       cwd: '/workspace',
@@ -292,6 +321,21 @@ describe('Antigravity provider lifecycle', () => {
     expect(editor.snapshot().status).toMatchObject({ authenticated: false, live: false, ready: false })
     await provider.signIn()
     expect(editor.snapshot().status).toMatchObject({ authenticated: true, live: false, ready: true })
+  })
+
+  it('does not publish a session when disposal wins native initialization', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const settingMode = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const connection = new FakeConnection({ onSetMode: async () => { entered(); await gate } })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const opening = provider.openSession({ route: route(), session: sessionId('disposing-open'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await settingMode
+    await provider.dispose()
+    release()
+    await expect(opening).rejects.toThrow(/disposed/)
+    expect(connection.isClosed).toBe(true)
   })
 
   it('bounds a hanging native session close and still closes transport', async () => {
@@ -337,6 +381,7 @@ describe('Antigravity provider lifecycle', () => {
     const audit: string[] = []
     let opened = 0
     const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { opened++; return new FakeConnection() } })
+    await expect(provider.openSession({ route: route(), session: sessionId('direct'), permissionMode: 'full-access', fullAccessConfirmed: true, fullAccessAuditId: 'direct-audit', signal: new AbortController().signal })).rejects.toThrow(/provider registry/)
     const registry = new ExternalAgentProviderRegistry({ auditFullAccess: entry => { audit.push(entry.mode) } })
     registry.register(provider)
     await expect(registry.openSession({ route: route(), session: sessionId('s'), permissionMode: 'full-access', signal: new AbortController().signal })).rejects.toThrow(/confirmation/)
@@ -366,6 +411,26 @@ describe('Antigravity official ACP transport', () => {
     expect(() => spawnAntigravityAcp(launchSpec(), { cancelGraceMs: 0 })).toThrow(/cancelGraceMs/)
   })
 
+  it('waits for a cancelled native prompt to settle', async () => {
+    const script = [
+      "import readline from 'node:readline'",
+      "const output = value => process.stdout.write(JSON.stringify(value) + String.fromCharCode(10))",
+      "const input = readline.createInterface({ input: process.stdin })",
+      "let promptId",
+      "for await (const line of input) { const request = JSON.parse(line); if (request.method === 'initialize') output({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: { sessionCapabilities: { resume: {} } } } }); else if (request.method === 'session/prompt') promptId = request.id; else if (request.method === 'session/cancel') { output({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'settled' } } } }); output({ jsonrpc: '2.0', id: promptId, result: { stopReason: 'cancelled' } }); } }",
+    ].join(';')
+    const connection = spawnAntigravityAcp({ command: process.execPath, args: ['--input-type=module', '-e', script], cwd: process.cwd(), env: process.env, shell: false, extendEnv: false }, { cancelGraceMs: 100 })
+    await connection.request('initialize', { protocolVersion: 1 })
+    let settled = false
+    connection.setNotificationHandler(method => { if (method === 'session/update') settled = true })
+    const controller = new AbortController()
+    const prompt = connection.request('session/prompt', { sessionId: 'native', prompt: [{ type: 'text', text: 'go' }] }, controller.signal)
+    controller.abort()
+    await expect(prompt).rejects.toThrow(/aborted/)
+    expect(settled).toBe(true)
+    await connection.close()
+  })
+
   it('round-trips SDK requests, agent callbacks, notifications, redaction, and teardown', async () => {
     const script = [
       "import readline from 'node:readline'",
@@ -379,8 +444,10 @@ describe('Antigravity official ACP transport', () => {
 
     ].join(';')
     const stderr: string[] = []
+    let receiveStderr!: () => void
+    const stderrReceived = new Promise<void>(resolve => { receiveStderr = resolve })
     const updates: string[] = []
-    const connection = spawnAntigravityAcp({ command: process.execPath, args: ['--input-type=module', '-e', script], cwd: process.cwd(), env: process.env, shell: false, extendEnv: false }, { maxLineBytes: 4096, onStderr: text => stderr.push(text) })
+    const connection = spawnAntigravityAcp({ command: process.execPath, args: ['--input-type=module', '-e', script], cwd: process.cwd(), env: process.env, shell: false, extendEnv: false }, { maxLineBytes: 4096, onStderr: text => { stderr.push(text); receiveStderr(); throw new Error('diagnostic callback failed') } })
     let initialized: unknown
     try {
       initialized = await connection.request('initialize', { protocolVersion: 1 })
@@ -398,6 +465,7 @@ describe('Antigravity official ACP transport', () => {
     }
     expect(prompted).toMatchObject({ stopReason: 'end_turn' })
     expect(updates[0]).toContain('session/update')
+    await stderrReceived
     expect(stderr.join('')).not.toContain('secret-token')
     expect(stderr.join('')).toContain('Bearer [REDACTED]')
     await connection.close()

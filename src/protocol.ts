@@ -71,15 +71,18 @@ export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioA
       return
     }
     if (authorization === null) return
+    try { options.onAuthorizationUrl(authorization) } catch (error) {
+      if (strict) throw error
+      return
+    }
     authorizationState = authorization.state
-    options.onAuthorizationUrl(authorization)
   }
   const guard = new LineBoundTransform(maxLineBytes, line => emitAuthorization(line, true))
   child.stdout.pipe(guard)
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk: string) => {
     const raw = String(chunk)
-    options.onStderr?.(redactAntigravityText(raw))
+    try { options.onStderr?.(redactAntigravityText(raw)) } catch { /* Diagnostic callbacks cannot escape the EventEmitter path. */ }
     emitAuthorization(raw, false)
   })
   const connection = new SdkAcpConnection(child, guard, cancelGraceMs)
@@ -229,22 +232,21 @@ function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): 
 
 function withAbort<T>(operation: Promise<T>, signal: AbortSignal | undefined, onAbort: () => (() => void) | void): Promise<T> {
   if (signal === undefined) return operation
-  if (signal.aborted) {
-    const cleanup = onAbort() ?? (() => undefined)
-    void operation.then(cleanup, cleanup)
-    return Promise.reject(new DOMException('The operation was aborted', 'AbortError'))
-  }
   return new Promise<T>((resolve, reject) => {
-    let settled = false
-    const finish = (): void => { if (settled) return; settled = true; signal.removeEventListener('abort', abort) }
-    const abort = (): void => {
-      const cleanup = onAbort() ?? (() => undefined)
-      void operation.then(cleanup, cleanup)
+    let aborted = signal.aborted
+    let cleanup = aborted ? onAbort() : undefined
+    const abort = (): void => { aborted = true; cleanup = onAbort() }
+    if (!aborted) signal.addEventListener('abort', abort, { once: true })
+    const finish = (): void => { signal.removeEventListener('abort', abort); cleanup?.() }
+    operation.then(value => {
       finish()
-      reject(new DOMException('The operation was aborted', 'AbortError'))
-    }
-    signal.addEventListener('abort', abort, { once: true })
-    operation.then(value => { finish(); resolve(value) }, error => { finish(); reject(error) })
+      if (aborted) reject(new DOMException('The operation was aborted', 'AbortError'))
+      else resolve(value)
+    }, error => {
+      finish()
+      if (aborted) reject(new DOMException('The operation was aborted', 'AbortError'))
+      else reject(error)
+    })
   })
 }
 

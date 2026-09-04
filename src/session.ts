@@ -1,6 +1,7 @@
 import {
   resumeCursor,
   sessionId,
+  truncateUtf8,
   withBoundedExternalAgentHost,
   type ExternalAgentAttachment,
   type ExternalAgentOpenRequest,
@@ -121,18 +122,6 @@ async function promptBlocks(prompt: string, attachments: readonly ExternalAgentA
 }
 
 function utf8Length(value: string): number { return new TextEncoder().encode(value).byteLength }
-function truncateUtf8(value: string, maxBytes: number): string {
-  if (utf8Length(value) <= maxBytes) return value
-  let result = ''
-  let bytes = 0
-  for (const character of value) {
-    const next = utf8Length(character)
-    if (bytes + next > maxBytes) break
-    result += character
-    bytes += next
-  }
-  return result
-}
 function responseFailure(response: unknown): string | undefined {
   if (!isRecord(response)) return undefined
   const nested = isRecord(response.error) ? stringValue(response.error.message) : undefined

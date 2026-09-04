@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { URL } from 'node:url'
 import { isRecord } from './decode.js'
@@ -59,6 +59,11 @@ export async function prepareAntigravityProfile(config: AntigravityProviderConfi
 /** Remove one provider-owned profile and recreate its empty private settings. */
 export async function clearAntigravityProfile(config: AntigravityProviderConfig): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
+  try {
+    if ((await lstat(profileDirectory)).isSymbolicLink()) throw new Error('Antigravity profile path must not be a symbolic link')
+  } catch (error) {
+    if (!isFileNotFound(error)) throw error
+  }
   await rm(profileDirectory, { recursive: true, force: true })
   return prepareAntigravityProfile(config)
 }
@@ -73,7 +78,8 @@ export function buildAntigravityEnvironment(input: {
 }): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(input.baseEnv ?? process.env)) {
-    if (!ambientCredentialKeys.has(key.toUpperCase())) environment[key] = value
+    const upper = key.toUpperCase()
+    if (!ambientCredentialKeys.has(upper) && !/(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)$/.test(upper)) environment[key] = value
   }
   return {
     ...environment,
