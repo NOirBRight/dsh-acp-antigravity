@@ -113,7 +113,7 @@ export function buildAntigravityEnvironment(input: {
     const upper = key.toUpperCase()
     if (!ambientCredentialKeys.has(upper) && !/(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)/.test(upper)) environment[key] = value
   }
-  const out: NodeJS.ProcessEnv = {
+  return {
     ...environment,
     GEMINI_HOME: input.profileDirectory,
     AGY_ACP_FORCE_FILE_STORAGE: '1',
@@ -121,19 +121,6 @@ export function buildAntigravityEnvironment(input: {
     PYTHONUNBUFFERED: '1',
     ELECTRON_RUN_AS_NODE: '1',
   }
-  applyLocalClashProxy(out)
-  return out
-}
-
-function applyLocalClashProxy(environment: NodeJS.ProcessEnv): void {
-  if (environment.HTTPS_PROXY !== undefined || environment.https_proxy !== undefined || environment.ALL_PROXY !== undefined) return
-  const url = 'http://127.0.0.1:7890'
-  environment.HTTP_PROXY = url
-  environment.HTTPS_PROXY = url
-  environment.ALL_PROXY = url
-  environment.http_proxy = url
-  environment.https_proxy = url
-  environment.all_proxy = url
 }
 
 /** Return a value-free profile settings document for personal OAuth. */
