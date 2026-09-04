@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { URL } from 'node:url'
 import type { ExternalAgentProviderInstanceId } from '@deepseek-ai/dsh-acp-provider'
@@ -41,13 +41,15 @@ export function resolveAntigravityProfileDirectory(stateDirectory: string, insta
 /** Create private profile directories and select the personal OAuth authentication type. */
 export async function prepareAntigravityProfile(config: AntigravityProviderConfig, authMethod: AntigravityAuthMethod = 'oauth-personal'): Promise<string> {
   const profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
-  try {
-    if ((await lstat(profileDirectory)).isSymbolicLink()) throw new Error('Antigravity profile path must not be a symbolic link')
-  } catch (error) {
-    if (!isFileNotFound(error)) throw error
-  }
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 })
-  await chmod(profileDirectory, 0o700)
+  let profileDirectoryFile
+  try {
+    profileDirectoryFile = await open(profileDirectory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && (error.code === 'ELOOP' || error.code === 'ENOTDIR')) throw new Error('Antigravity profile path must not be a symbolic link and must be a directory')
+    throw error
+  }
+  try { await profileDirectoryFile.chmod(0o700) } finally { await profileDirectoryFile.close() }
   const settingsPath = join(profileDirectory, 'settings.json')
   let settings: Record<string, unknown> = {}
   try {
