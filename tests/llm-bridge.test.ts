@@ -5,10 +5,11 @@ import { providerId } from '@deepseek-ai/dsh-acp-provider'
 describe('Antigravity LLM bridge', () => {
   it('extracts the latest user text', () => {
     expect(lastUserText([
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
-      { role: 'user', content: [{ type: 'text', text: 'next' }] },
-    ])).toBe('next')
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '你是什么模型' }] },
+      { role: 'user', source: { kind: 'plugin', plugin: 'dsh-system-prompt', form: 'snapshot' }, content: [{ type: 'text', text: 'sandbox policy' }] },
+    ])).toBe('你是什么模型')
   })
 
   it('streams ACP assistant deltas as LLM text chunks', async () => {

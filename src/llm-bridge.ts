@@ -13,12 +13,17 @@ export function lastUserText(messages: readonly unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (!isRecord(message)) continue
-    if (message.role === 'user' || i === messages.length - 1) {
+    if (isRecord(message.source) && message.source.kind === 'plugin') continue
+    if (message.role === 'user' || (isRecord(message.source) && message.source.kind === 'user')) {
       const text = textOf(message.content)
       if (text.length > 0) return text
     }
   }
   return ''
+}
+
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil([...text].length / 4))
 }
 
 function textOf(value: unknown): string {
@@ -117,6 +122,7 @@ export function createAntigravityLlmBridge(getProvider: () => ExternalAgentProvi
       const result = await running
       const text = assembled.length > 0 ? assembled : result.text
       yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+      yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(text) } }
       yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
