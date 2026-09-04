@@ -1,4 +1,3 @@
-import { providerId } from '@deepseek-ai/dsh-acp-provider'
 import type { ExternalAgentSettingsEditor, ExternalAgentSettingsEditorSnapshot, ExternalAgentSettingsField, ExternalAgentSettingsStatus } from '@deepseek-ai/dsh-acp-provider/settings'
 import { AntigravityProvider } from './provider.js'
 import type { AntigravityHealth, AntigravityProviderConfig } from './types.js'
@@ -24,7 +23,7 @@ function settingsStatus(health: AntigravityHealth, live: boolean): ExternalAgent
 }
 /** Build a live provider-owned Settings card with validation and OAuth actions. */
 export function createAntigravitySettingsEditor(config: AntigravityProviderConfig, provider: AntigravityProvider): ExternalAgentSettingsEditor {
-  const id = providerId(config.instanceId === 'default' ? 'antigravity' : 'antigravity:' + config.instanceId)
+  const id = provider.info.id
   return {
     provider: id,
     instanceId: config.instanceId,

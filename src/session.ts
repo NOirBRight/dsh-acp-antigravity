@@ -16,12 +16,12 @@ import { errorMessage, isRecord, stringValue } from './decode.js'
 import { createAntigravityInteractionHandler } from './interaction.js'
 import { mapPermissionMode, normalizeAntigravitySessionUpdate } from './mapping.js'
 import type { AcpConnection } from './protocol.js'
-import type { AntigravityClientFilesystem, AntigravityProviderConfig } from './types.js'
+import { ANTIGRAVITY_PERMISSION_MODES, type AntigravityClientFilesystem, type AntigravityProviderConfig } from './types.js'
 
 /** One provider-native session with turn-scoped host callbacks. */
 export class AntigravitySession implements ExternalAgentSession {
   readonly ref: ExternalAgentSessionRef
-  readonly supportedModes = ['approval-required', 'auto-accept-edits', 'full-access'] as const
+  readonly supportedModes = ANTIGRAVITY_PERMISSION_MODES
   private readonly nativeSession: ExternalAgentSessionId
   private active = false
   private disposed = false
