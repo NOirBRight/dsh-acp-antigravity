@@ -1,5 +1,5 @@
 /** External Agents settings page for the Antigravity ACP provider. */
-import { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AcpInstallProgress, AcpSettingsRow, AcpSettingsSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
@@ -95,7 +95,7 @@ function ProviderCard(props: {
           ? <button type='button' style={ghostBtn} onClick={() => onRun('sign-out')}>{t('signOut')}</button>
           : <button type='button' style={ghostBtn} disabled={signingIn === true} onClick={onSignIn}>{signingIn === true ? t('signingIn') : t('signIn')}</button>}
         {row.authorizationUrl
-          ? <a href={row.authorizationUrl} target='_blank' rel='noreferrer' style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>{t('openLogin')}</a>
+          ? <button type='button' style={ghostBtn} onClick={() => onRun('open-login')}>{t('openLogin')}</button>
           : null}
       </div>
     </li>
@@ -108,7 +108,6 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   const [draft, setDraft] = useState<AcpSettingsRow | undefined>(undefined)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [error, setError] = useState<string | undefined>(undefined)
-  const loginWindow = useRef<Window | null>(null)
 
   const refresh = async (): Promise<void> => {
     let next = await load()
@@ -148,10 +147,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
       void load().then(next => {
         setSnapshot(next)
         setDraft(next.rows[0])
-        const url = next.rows[0]?.authorizationUrl
-        if (url !== undefined && loginWindow.current !== null && !loginWindow.current.closed) {
-          try { loginWindow.current.location.href = url } catch { /* cross-origin after Google redirect */ }
-        }
+
       }).catch(() => undefined)
     }, 500)
     return () => window.clearInterval(timer)
@@ -194,7 +190,6 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
             install={snapshot.install}
             signingIn={snapshot.signingIn}
             onSignIn={() => {
-              loginWindow.current = window.open('about:blank', 'antigravity-oauth')
               void run('sign-in').then(() => load()).then(next => { setSnapshot(next); setDraft(next.rows[0]) }).catch(caught => setError(caught instanceof Error ? caught.message : t('failed')))
             }}
             onRun={action => { void run(action).then(() => refresh()).catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }}

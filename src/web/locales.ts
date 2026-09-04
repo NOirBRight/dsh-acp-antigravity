@@ -46,7 +46,7 @@ export const zh: Record<AcpSettingsKey, string> = {
   profile: 'Profile',
   install: 'Install Antigravity',
   installing: 'Installing…',
-  signingIn: 'Waiting for Google sign-in…',
+  signingIn: 'Opening Google in your default browser…',
 }
 
 export const en: Record<AcpSettingsKey, string> = { ...zh }

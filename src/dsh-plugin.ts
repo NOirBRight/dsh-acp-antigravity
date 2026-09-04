@@ -4,6 +4,7 @@ import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provid
 import { join } from 'node:path'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
+import { openDefaultBrowser } from './browser.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
@@ -80,7 +81,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     installed = installAntigravityProvider(
       { externalAgents: registry, settingsEditors: editors },
       toProviderConfig(next),
-      { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => { authorizationUrl = request.authorizationUrl } },
+      { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => {
+        authorizationUrl = request.authorizationUrl
+        try { openDefaultBrowser(request.authorizationUrl) } catch { /* Settings still shows the URL if the desktop opener is missing. */ }
+      } },
     )
   }
 
@@ -130,6 +134,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }
+      }
+      if (action === 'open-login') {
+        if (authorizationUrl === undefined) throw new Error('Antigravity sign-in URL is not available yet')
+        openDefaultBrowser(authorizationUrl)
+        return { opened: true }
       }
       if (action === 'sign-in') {
         if (signInJob === undefined) {
