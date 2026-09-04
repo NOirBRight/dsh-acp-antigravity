@@ -6,6 +6,7 @@ import {
   PICK_ENDPOINT,
   RUN_ENDPOINT,
   SAVE_ENDPOINT,
+  CATALOG_ENDPOINT,
   SNAPSHOT_ENDPOINT,
   decodeConfig,
   type AcpAntigravitySettingsConfig,
@@ -25,6 +26,7 @@ function errorText(error: unknown): string {
 /** Live Settings operations owned by the host plugin. */
 export interface AcpSettingsRpcDeps {
   snapshot(): Promise<AcpSettingsSnapshot>
+  catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string }[] }[] }>
   applyConfig(config: AcpAntigravitySettingsConfig): Promise<void>
   run(action: string, value?: unknown, signal?: AbortSignal): Promise<unknown>
 }
@@ -33,6 +35,7 @@ export interface AcpSettingsRpcDeps {
 export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult> {
   return async (endpoint, payload, signal) => {
     if (endpoint === SNAPSHOT_ENDPOINT) return { ok: true, value: await deps.snapshot() }
+    if (endpoint === CATALOG_ENDPOINT) return { ok: true, value: await deps.catalog() }
     if (endpoint === SAVE_ENDPOINT) {
       const decoded = decodeConfig(payload)
       if (decoded === undefined) return fail('invalid Antigravity settings')

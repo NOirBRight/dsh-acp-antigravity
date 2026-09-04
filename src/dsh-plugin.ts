@@ -120,6 +120,16 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   await mount(live)
   registerAcpSettingsRpc(ctx, {
     snapshot,
+    catalog: async () => {
+      if (installed === undefined) return { groups: [] }
+      if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
+      if (models.length === 0) {
+        try { models = (await installed.provider.listModels()).map(model => ({ id: String(model.id), name: model.name })) }
+        catch { return { groups: [] } }
+      }
+      if (models.length === 0) return { groups: [] }
+      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: models.map(model => ({ id: model.id, name: model.name })) }] }
+    },
     applyConfig: async next => {
       await mount(next)
       savePersistedConfig(home, next)
@@ -143,7 +153,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (action === 'sign-in') {
         if (signInJob === undefined) {
           signingIn = true
-          signInJob = installed.provider.signIn().catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined })
+          const provider = installed.provider
+          signInJob = provider.signIn().then(async () => {
+            try { models = (await provider.listModels()).map(model => ({ id: String(model.id), name: model.name })) } catch { /* picker stays empty until a later catalog load */ }
+          }).catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined })
         }
         return { started: true }
       }

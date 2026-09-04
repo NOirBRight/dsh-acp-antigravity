@@ -5,6 +5,7 @@ export const SNAPSHOT_ENDPOINT = 'snapshot'
 export const SAVE_ENDPOINT = 'save'
 export const RUN_ENDPOINT = 'run'
 export const PICK_ENDPOINT = 'pick'
+export const CATALOG_ENDPOINT = 'catalog'
 
 /** Persisted Settings values for one Antigravity instance. */
 export interface AcpAntigravitySettingsConfig {

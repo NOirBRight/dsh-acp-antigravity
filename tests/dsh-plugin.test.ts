@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, decodeSnapshot, name, inject } from '../src/index.js'
-import { ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
+import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
 
 describe('DSH settings plugin', () => {
   const homes: string[] = []
@@ -31,6 +31,9 @@ describe('DSH settings plugin', () => {
     expect(snapshot?.title).toBe('External Agents')
     expect(snapshot?.rows).toHaveLength(1)
     expect(snapshot?.rows[0]).toMatchObject({ title: 'Antigravity', enabled: true, installed: false })
+    const catalog = await handler!(CATALOG_ENDPOINT, {}) as { ok: boolean; value: { groups: unknown[] } }
+    expect(catalog.ok).toBe(true)
+    expect(catalog.value.groups).toEqual([])
   })
 
   it('marks a configured executable pair as installed after validation', async () => {
