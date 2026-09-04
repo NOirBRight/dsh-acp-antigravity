@@ -125,9 +125,12 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
       const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models, next => { models = [...next] }, {
         ask: async request => {
-          const service = ctx.get?.('userQuestions') as { ask?: (payload: typeof request) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
+          const service = ctx.get?.('userQuestions') as { ask?: (payload: Record<string, unknown>) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
           if (service?.ask === undefined) return { answers: [] }
-          return service.ask(request)
+          const agents = ctx.get?.('agents') as { get?: (id: string) => unknown; roots?: () => unknown[] } | undefined
+          const agent = (request.sessionId === undefined ? undefined : agents?.get?.(request.sessionId)) ?? agents?.roots?.()[0]
+          const { sessionId: _ignored, ...rest } = request
+          return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
       })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))

@@ -26,6 +26,7 @@ export interface BridgeAskRequest {
     intent?: { kind: 'plan-review'; approve: string }
   }[]
   signal?: AbortSignal
+  sessionId?: string
 }
 
 export interface BridgeHost {
@@ -84,11 +85,14 @@ function estimateTokens(text: string): number {
 }
 
 function formatToolActivity(event: { name: string; status: string; input?: string; output?: string; error?: string }): string {
+  if (event.status === 'pending' || event.status === 'running') return ''
   const title = event.name.replace(/_/g, ' ')
   const target = toolTarget(event.input)
-  const bits = [`**${title}**`, ...(target === undefined ? [] : [target]), event.status]
-  if (event.error) bits.push(event.error)
-  return bits.join(' · ') + String.fromCharCode(10) + String.fromCharCode(10)
+  const nl = String.fromCharCode(10)
+  const head = '<strong>' + title + '</strong>' + (target === undefined ? '' : ' · ' + target) + ' · ' + event.status
+  const body = event.error ?? event.output
+  if (body === undefined || body.length === 0) return '<p>' + head + '</p>' + nl
+  return '<details><summary>' + head + '</summary>' + nl + nl + body.slice(0, 4000) + nl + '</details>' + nl
 }
 
 function toolTarget(input?: string): string | undefined {
@@ -238,8 +242,8 @@ export function createAntigravityLlmBridge(
               push('text', formatPlanUpdate(event))
             }
           },
-          requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal),
-          requestUserInput: request => decideUserInput(request, hostAsk, options.signal),
+          requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal, options.sessionId),
+          requestUserInput: request => decideUserInput(request, hostAsk, options.signal, options.sessionId),
         })
         async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
           let { thought, text, thoughtOpen, textOpen } = start
@@ -280,7 +284,12 @@ export function createAntigravityLlmBridge(
         const result = await first
         let assembled = state.text.length > 0 ? state.text : result.text
         if (inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
-          const approved = await reviewPlan(assembled, hostAsk, options.signal)
+          let approved = false
+          try {
+            approved = await reviewPlan(assembled, hostAsk, options.signal, options.sessionId)
+          } catch {
+            approved = false
+          }
           if (approved) {
             const second = session.runTurn({
               turn: turnId('t' + String(++turns)),
@@ -305,6 +314,7 @@ export function createAntigravityLlmBridge(
         yield { type: 'block-start', index: 0, blockType: 'text' }
         yield { type: 'text-delta', index: 0, text: message }
         yield { type: 'block-end', index: 0, block: { type: 'text', text: message } }
+        yield { type: 'usage', usage: { inputTokens: 1, outputTokens: estimateTokens(message) } }
         yield { type: 'finish', reason: 'stop' }
       }
     },
@@ -316,6 +326,7 @@ async function decidePermission(
   mode: 'approval-required' | 'auto-accept-edits' | 'full-access',
   hostAsk: BridgeHost | undefined,
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<ExternalAgentPermissionDecision> {
   if (mode === 'full-access' || hostAsk?.ask === undefined) {
     const once = request.options.find(option => option.kind === 'allow_once') ?? request.options.find(option => option.kind === 'allow_always')
@@ -330,6 +341,7 @@ async function decidePermission(
       ...(options.length > 0 ? { options } : {}),
     }],
     ...(signal === undefined ? {} : { signal }),
+    ...(sessionId === undefined ? {} : { sessionId }),
   })
   const selected = result.answers[0]?.selected[0]
   const option = request.options.find(item => item.label === selected)
@@ -347,6 +359,7 @@ async function decideUserInput(
   request: ExternalAgentUserInputRequest,
   hostAsk: BridgeHost | undefined,
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<{ answers: string[] }> {
   if (hostAsk?.ask === undefined) return { answers: [] }
   const options = request.options?.map(label => ({ label }))
@@ -357,6 +370,7 @@ async function decideUserInput(
       ...(options === undefined ? {} : { options }),
     }],
     ...(signal === undefined ? {} : { signal }),
+    ...(sessionId === undefined ? {} : { sessionId }),
   })
   const item = result.answers[0]
   if (item === undefined) return { answers: [] }
@@ -365,7 +379,7 @@ async function decideUserInput(
   return { answers: [] }
 }
 
-async function reviewPlan(plan: string, hostAsk: BridgeHost, signal?: AbortSignal): Promise<boolean> {
+async function reviewPlan(plan: string, hostAsk: BridgeHost, signal?: AbortSignal, sessionId?: string): Promise<boolean> {
   const result = await hostAsk.ask!({
     questions: [{
       id: 'plan-review',
@@ -379,6 +393,7 @@ async function reviewPlan(plan: string, hostAsk: BridgeHost, signal?: AbortSigna
       intent: { kind: 'plan-review', approve: APPROVE_LABEL },
     }],
     ...(signal === undefined ? {} : { signal }),
+    ...(sessionId === undefined ? {} : { sessionId }),
   })
   const item = result.answers.find(entry => entry.id === 'plan-review')
   return item?.selected.length === 1 && item.selected[0] === APPROVE_LABEL && item.custom === undefined
