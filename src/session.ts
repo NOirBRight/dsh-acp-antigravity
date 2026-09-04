@@ -1,6 +1,7 @@
 import {
   resumeCursor,
   sessionId,
+  withBoundedExternalAgentHost,
   type ExternalAgentAttachment,
   type ExternalAgentOpenRequest,
   type ExternalAgentProvider,
@@ -43,13 +44,14 @@ export class AntigravitySession implements ExternalAgentSession {
     let providerFailure: string | undefined
     let events = Promise.resolve()
     const maxTextBytes = this.config.maxEventTextBytes ?? 1024 * 1024
-    const handler = createAntigravityInteractionHandler(host, this.filesystem)
+    const bounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
+    const handler = createAntigravityInteractionHandler(withBoundedExternalAgentHost(host, bounds), this.filesystem)
     this.connection.setRequestHandler(handler)
     this.connection.setNotificationHandler((method, params) => {
       if (method !== 'session/update' || protocolFailure !== undefined) return
-      const update = isRecord(params) && params.update !== undefined ? params.update : params
       try {
-        const event = normalizeAntigravitySessionUpdate(update, { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 })
+        if (!isRecord(params) || params.sessionId !== this.nativeId) throw new Error('Antigravity session update belongs to another session')
+        const event = normalizeAntigravitySessionUpdate(params.update, bounds)
         if (event === null) return
         if (event.type === 'assistant-delta') {
           const delta = truncateUtf8(event.text, maxTextBytes - textBytes)

@@ -24,6 +24,8 @@ interface FakeConnectionOptions {
   readonly authenticationAvailable?: boolean
   readonly updates?: readonly unknown[]
   readonly promptResponse?: unknown
+  readonly updateSessionId?: string
+  readonly agentRequests?: readonly { readonly method: string; readonly params: unknown }[]
 }
 
 class FakeConnection implements AcpConnection {
@@ -36,7 +38,7 @@ class FakeConnection implements AcpConnection {
 
   async request(method: string, params?: unknown): Promise<unknown> {
     this.calls.push({ method, params })
-    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionResume: true } }
+    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'antigravity-acp', version: '1.2.3' }, agentCapabilities: { sessionCapabilities: { resume: {} } } }
     if (method === 'authenticate') {
       if (this.options.authenticationAvailable === false) throw new Error('method not found')
       return {}
@@ -48,7 +50,8 @@ class FakeConnection implements AcpConnection {
         { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } },
         { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'read', status: 'completed', locations: ['/workspace/src/a.ts'] },
       ]
-      for (const update of updates) this.notificationHandler?.('session/update', { sessionId: 'native-1', update })
+      for (const update of updates) this.notificationHandler?.('session/update', { sessionId: this.options.updateSessionId ?? 'native-1', update })
+      for (const request of this.options.agentRequests ?? []) await this.requestHandler?.(request.method, request.params, 10)
       return this.options.promptResponse ?? { stopReason: 'end_turn', usage: { inputTokens: 2, outputTokens: 3 } }
     }
     throw new Error('method not found')
@@ -104,7 +107,7 @@ describe('Antigravity mapping and safety', () => {
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'Other Agent' } })).toThrow(/not antigravity-acp/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 2, agentInfo: { name: 'antigravity-acp' } })).toThrow(/version/)
     expect(() => validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' } })).toThrow(/capabilities/)
-    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: {}, sessionCapabilities: { resume: false } }).supportsResume).toBe(false)
+    expect(validateAntigravityIdentity({ protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: { sessionCapabilities: { resume: false } } }).supportsResume).toBe(false)
   })
 
   it('derives allow-always scope from the native session request', async () => {
@@ -190,6 +193,33 @@ describe('Antigravity provider lifecycle', () => {
     const session = await provider.openSession({ route: route(), session: sessionId('malformed'), permissionMode: 'approval-required', signal: new AbortController().signal })
     await expect(session.runTurn({ turn: turnId('malformed-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', error: 'Antigravity emitted a malformed session update' })
     expect(connection.calls.some(call => call.method === 'session/cancel')).toBe(true)
+    await session.dispose()
+  })
+
+  it('fails and cancels updates from another native session', async () => {
+    const connection = new FakeConnection({ updateSessionId: 'native-other' })
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('isolated'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('isolated-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', error: 'Antigravity emitted a malformed session update' })
+    expect(connection.calls.some(call => call.method === 'session/cancel')).toBe(true)
+    await session.dispose()
+  })
+
+  it('bounds permission and question text before host callbacks', async () => {
+    const connection = new FakeConnection({ agentRequests: [
+      { method: 'session/request_permission', params: { sessionId: 'native-1', toolCall: { title: 'tool-name', rawInput: 'permission-reason' }, options: [{ optionId: 'once', kind: 'allow_once', name: 'allow-label' }], _meta: { agy: { securityWarning: 'security-warning' } } } },
+      { method: 'session/request_user_input', params: { sessionId: 'native-1', question: 'question-text', options: ['option-text'] } },
+    ] })
+    const seen: string[] = []
+    const boundedHost: ExternalAgentTurnHost = {
+      publish: () => undefined,
+      requestPermission: async request => { seen.push(request.toolName, request.reason, request.options[0]!.label, request.securityWarning!.message); return { kind: 'allow-once', optionId: request.options[0]!.optionId } },
+      requestUserInput: async request => { seen.push(request.question, request.options![0]!); return { answers: ['ok'] } },
+    }
+    const provider = new AntigravityProvider({ ...config(), maxEventTextBytes: 4, maxEventPayloadBytes: 1024 }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('bounded-interaction'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('bounded-interaction-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, boundedHost)).resolves.toMatchObject({ status: 'completed' })
+    expect(seen).toEqual(['tool', 'perm', 'allo', 'secu', 'ques', 'opti'])
     await session.dispose()
   })
 
