@@ -12,6 +12,7 @@ import { installAntigravityProvider, type InstalledAntigravityProvider } from '.
 import { registerAcpSettingsRpc } from './rpc.js'
 import { dshHome, loadPersistedConfig, savePersistedConfig } from './store.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
+import type { AntigravityToolEvent } from './tool-events.js'
 
 /** Loader-supplied Settings values. Empty paths stay on the page until the user locates them. */
 export interface DshPluginConfig {
@@ -49,6 +50,20 @@ function resolvePluginConfig(config: DshPluginConfig, persisted?: AcpAntigravity
     ...(merged.model === undefined || merged.model.trim() === '' ? {} : { model: merged.model.trim() }),
     enabled: merged.enabled !== false,
   }
+}
+
+function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown {
+  const agents = ctx.get?.('agents') as { get?: (id: string) => unknown; roots?: () => unknown[] } | undefined
+  return (sessionId === undefined ? undefined : agents?.get?.(sessionId)) ?? agents?.roots?.()[0]
+}
+
+function appendToolEvents(ctx: DshPluginContext, sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void {
+  const candidate = agentFor(ctx, sessionId)
+  const session = candidate !== null && typeof candidate === 'object' && 'session' in candidate
+    ? (candidate as { session?: unknown }).session
+    : undefined
+  if (session === null || typeof session !== 'object' || !('append' in session) || typeof session.append !== 'function') return
+  for (const event of events) session.append(event.type, event.data)
 }
 
 function toProviderConfig(config: AcpAntigravitySettingsConfig) {
@@ -127,11 +142,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         ask: async request => {
           const service = ctx.get?.('userQuestions') as { ask?: (payload: Record<string, unknown>) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
           if (service?.ask === undefined) return { answers: [] }
-          const agents = ctx.get?.('agents') as { get?: (id: string) => unknown; roots?: () => unknown[] } | undefined
-          const agent = (request.sessionId === undefined ? undefined : agents?.get?.(request.sessionId)) ?? agents?.roots?.()[0]
+          const agent = agentFor(ctx, request.sessionId)
           const { sessionId: _ignored, ...rest } = request
           return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
+        appendToolEvents: (sessionId, events) => { appendToolEvents(ctx, sessionId, events) },
       })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })

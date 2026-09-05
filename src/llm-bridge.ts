@@ -12,6 +12,7 @@ import {
 } from '@deepseek-ai/dsh-acp-provider'
 import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
 import { isRecord } from './decode.js'
+import { toDurableToolEvents, type AntigravityToolEvent } from './tool-events.js'
 
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
@@ -31,6 +32,7 @@ export interface BridgeAskRequest {
 
 export interface BridgeHost {
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
+  appendToolEvents?(sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void
 }
 
 export function lastUserText(messages: readonly unknown[]): string {
@@ -87,54 +89,6 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil([...text].length / 4))
 }
 
-function formatToolActivity(event: { name: string; status: string; input?: string; output?: string; error?: string }): string {
-  if (event.status === 'pending' || event.status === 'running') return ''
-  const input = parseJsonRecord(event.input)
-  const output = parseJsonRecord(event.output)
-  const command = stringField(input, 'CommandLine') ?? stringField(input, 'commandLine') ?? stringField(output, 'commandLine')
-  const path = stringField(input, 'AbsolutePath') ?? stringField(input, 'file_path') ?? stringField(input, 'directory_path') ?? stringField(input, 'path') ?? stringField(output, 'workingDir')
-  const title = command ?? (event.name === 'native tool' ? 'tool' : event.name.replace(/_/g, ' '))
-  const target = path === undefined ? undefined : fileLink(path)
-  const nl = String.fromCharCode(10)
-  const head = '**' + title + '**' + (target === undefined ? '' : ' · ' + target) + ' · ' + event.status
-  const body = event.error ?? stringField(output, 'combinedOutput') ?? stringField(output, 'formatted_output') ?? (output === undefined ? event.output : undefined)
-  if (body === undefined || body.length === 0) return head + nl + nl
-  return head + nl + nl + '```' + nl + body.slice(0, 4000) + nl + '```' + nl + nl
-}
-
-function parseJsonRecord(raw?: string): Record<string, unknown> | undefined {
-  if (raw === undefined || raw.length === 0) return undefined
-  try {
-    const value = JSON.parse(raw) as unknown
-    return isRecord(value) ? value : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function toolTarget(input?: string): string | undefined {
-  if (input === undefined || input.length === 0) return undefined
-  const parsed = parseJsonRecord(input)
-  const path = parsed === undefined
-    ? undefined
-    : stringField(parsed, 'AbsolutePath') ?? stringField(parsed, 'file_path') ?? stringField(parsed, 'directory_path') ?? stringField(parsed, 'path')
-  if (path !== undefined) return fileLink(path)
-  const command = parsed === undefined ? undefined : stringField(parsed, 'CommandLine')
-  if (command !== undefined) return '`' + command + '`'
-  if (input.length < 120 && !input.startsWith('{')) return '`' + input + '`'
-  return undefined
-}
-
-function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
-  const item = value?.[key]
-  return typeof item === 'string' && item.length > 0 ? item : undefined
-}
-
-function fileLink(path: string): string {
-  const name = path.slice(path.lastIndexOf('/') + 1) || path
-  return '[' + name + '](file://' + path + ')'
-}
-
 export function workspaceRootFromMessages(messages: readonly unknown[]): string | undefined {
   const blob = messages.map(message => textOf(message)).join(String.fromCharCode(10))
   const match = /session workspace:\s*["']([^"']+)["']/i.exec(blob) ?? /workspace:\s*["'](\/[^"']+)["']/i.exec(blob)
@@ -182,6 +136,8 @@ export function createAntigravityLlmBridge(
   stream(options: StreamOptions): AsyncIterable<Chunk>
 } {
   const sessions = new Map<string, ExternalAgentSession>()
+  const emittedToolIds = new Map<string, Set<string>>()
+  let anonymousSessions = 0
   let turns = 0
   async function nativeModels(): Promise<readonly { id: string; name: string }[]> {
     const cached = getCachedModels?.() ?? []
@@ -221,7 +177,7 @@ export function createAntigravityLlmBridge(
       try {
         const installed = getProvider()
         if (installed === undefined) throw new Error('Antigravity is not configured')
-        const key = options.sessionId ?? 'default'
+        const key = options.sessionId ?? 'anonymous-' + String(++anonymousSessions)
         const permissionMode = permissionModeFromMessages(options.messages)
         const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
         const natives = await nativeModels()
@@ -252,7 +208,13 @@ export function createAntigravityLlmBridge(
           publish: event => {
             if (event.type === 'thought-delta') push('thought', event.text)
             else if (event.type === 'assistant-delta') push('text', event.text)
-            else if (event.type === 'tool-activity') push('text', formatToolActivity(event))
+            else if (event.type === 'tool-activity') {
+              const seen = emittedToolIds.get(key) ?? new Set<string>()
+              emittedToolIds.set(key, seen)
+              const events = toDurableToolEvents(event, seen, workspaceRoot)
+              if (!seen.has(event.toolId)) seen.add(event.toolId)
+              hostAsk?.appendToolEvents?.(options.sessionId, events)
+            }
             else if (event.type === 'plan-update') {
               sawPlan = true
               push('text', formatPlanUpdate(event))

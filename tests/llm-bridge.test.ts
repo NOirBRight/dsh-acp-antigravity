@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { acpPrompt, createAntigravityLlmBridge, lastUserText, looksLikePlan, permissionModeFromMessages } from '../src/llm-bridge.js'
 import { providerId } from '@deepseek-ai/dsh-acp-provider'
+import type { AntigravityToolEvent } from '../src/tool-events.js'
 
 describe('Antigravity LLM bridge', () => {
   it('extracts the latest user text', () => {
@@ -41,7 +42,8 @@ describe('Antigravity LLM bridge', () => {
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: 'stop' })
   })
 
-  it('projects thought and tool activity without DSH tool-call blocks', async () => {
+  it('projects thought while appending tool activity outside the assistant stream', async () => {
+    const appended: AntigravityToolEvent[] = []
     const adapter = createAntigravityLlmBridge(() => ({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
@@ -51,20 +53,28 @@ describe('Antigravity LLM bridge', () => {
         supportedModes: [],
         runTurn: async (_request: unknown, host: { publish: (event: Record<string, unknown>) => Promise<void> }) => {
           await host.publish({ type: 'thought-delta', text: 'thinking' })
-          await host.publish({ type: 'tool-activity', name: 'Read', status: 'completed', input: 'src/a.ts' })
+          await host.publish({ type: 'tool-activity', toolId: 'read-1', name: 'Read', status: 'completed', input: '{"path":"/workspace/src/a.ts"}', output: '{"combinedOutput":"ok"}' })
           await host.publish({ type: 'assistant-delta', text: 'done' })
           return { status: 'completed', text: 'done' }
         },
         dispose: async () => undefined,
       }),
-    }) as never)
+    }) as never, undefined, undefined, {
+      appendToolEvents: (_sessionId, events) => {
+        for (const event of events) appended.push(event)
+      },
+    })
     const chunks: { type: string; text?: string }[] = []
-    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }] })) {
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }] })) {
       chunks.push(chunk as { type: string; text?: string })
     }
     expect(chunks.some(chunk => chunk.type === 'reasoning-delta' && chunk.text === 'thinking')).toBe(true)
-    expect(chunks.some(chunk => chunk.type === 'text-delta' && (chunk.text ?? '').includes('Read'))).toBe(true)
+    expect(chunks.some(chunk => chunk.type === 'text-delta' && (chunk.text ?? '').includes('Read'))).toBe(false)
     expect(chunks.some(chunk => chunk.type === 'tool-call-delta')).toBe(false)
+    expect(appended).toEqual([
+      { type: 'antigravity/tool-start', data: { toolId: 'read-1', name: 'Read', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' } } },
+      { type: 'antigravity/tool-update', data: { toolId: 'read-1', status: 'completed', output: 'ok' } },
+    ])
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: 'stop' })
   })
 

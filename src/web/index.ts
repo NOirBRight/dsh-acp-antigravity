@@ -15,9 +15,13 @@ import {
   type AcpSettingsRow,
 } from '../client-contract.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
+import { AntigravityToolNode, antigravityToolDefinition } from './AntigravityToolNode.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 
-type ClientContext = Omit<Context, 'connection'> & { readonly connection: ConnectionHandle }
+type ClientContext = Omit<Context, 'connection'> & {
+  readonly connection: ConnectionHandle
+  readonly conversationEvents: { register(definition: unknown): () => void }
+}
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -26,9 +30,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'dsh-acp-antigravity-client'
-export const inject = ['slots', 'locale', 'connection']
+export const inject = ['slots', 'locale', 'connection', 'conversationEvents']
 
 export function apply(ctx: ClientContext): void {
+  ctx.effect(() => ctx.conversationEvents.register(antigravityToolDefinition), 'dsh-acp-antigravity: native tool event fold')
+  ctx.effect(() => ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node',
+    key: 'antigravity-tool',
+  }, AntigravityToolNode)), 'dsh-acp-antigravity: native tool row')
   const localeNamespace = 'settings.external-agents'
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'dsh-acp-antigravity: Settings page copy')
   const t = ctx.locale.bind(localeNamespace) as AcpSettingsFace['t']
