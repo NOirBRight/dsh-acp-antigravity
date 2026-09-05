@@ -5,6 +5,7 @@ function registrationBench() {
   const entries: Array<{ spec: Record<string, unknown>; component: unknown }> = []
   const definitions: unknown[] = []
   const registerProvider = vi.fn(() => vi.fn())
+  const effect = (register: () => unknown) => register()
   const ctx = {
     locale: { register: vi.fn(() => vi.fn()), bind: vi.fn(() => (key: string) => key) },
     slots: {
@@ -15,8 +16,8 @@ function registrationBench() {
     },
     connection: { rpc: { call: vi.fn() } },
     uiConversation: { events: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } } },
-    get: (name: string) => name === 'providerDirectory' ? { register: registerProvider } : undefined,
-    effect: (register: () => unknown) => register(),
+    inject: (_dependencies: string[], callback: (scope: object) => unknown) => callback({ providerDirectory: { register: registerProvider }, effect }),
+    effect,
   }
   apply(ctx as never)
   return { entries, definitions, registerProvider }
