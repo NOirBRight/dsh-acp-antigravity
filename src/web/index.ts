@@ -33,13 +33,10 @@ export const name = 'dsh-acp-antigravity-client'
 export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 
 function installProviderDirectory(ctx: ClientContext): void {
-  let directory: { register(entry: { key: string; role: 'agent' }): () => void } | undefined
-  try {
-    directory = ctx.get('providerDirectory', false) as typeof directory
-  } catch {
-    return
-  }
-  if (directory !== undefined) ctx.effect(() => directory.register({ key: 'antigravity', role: 'agent' }), 'dsh-acp-antigravity: provider directory registration')
+  ctx.inject(['providerDirectory'], scope => {
+    const directory = scope.providerDirectory as { register(entry: { key: string; role: 'agent' }): () => void }
+    scope.effect(() => directory.register({ key: 'antigravity', role: 'agent' }), 'dsh-acp-antigravity: provider directory registration')
+  })
 }
 
 export function apply(ctx: ClientContext): void {
