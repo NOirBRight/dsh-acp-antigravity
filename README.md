@@ -60,6 +60,10 @@ A DSH web profile loads this package as a bundle. The host plugin registers RPC;
 
 installAntigravityProvider() remains the library mount for hosts that own their own registry. The current DSH checkout still lacks the primary external-agent turn-driver and session-event hooks, so selecting Antigravity as a primary model is not claimed.
 
+## Account quota decision
+
+[ADR 0001](docs/adr/0001-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The usage reader and UI integration are not implemented yet.
+
 ## Real-binary smoke
 
 Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm exec vitest run tests/real-binary.test.ts`. The initialize-only smoke validates the user-provided executable pair without authentication or a model request. Also set `ANTIGRAVITY_AUTHENTICATED_STATE_DIRECTORY` and `ANTIGRAVITY_AUTHENTICATED_INSTANCE_ID` to run the opt-in read-only turn, cancellation, and resume smoke against that isolated authenticated profile. Each smoke skips when its inputs are absent and neither runs in ordinary unit gates.
