@@ -75,8 +75,9 @@ describe('ACP tool activity durable event family', () => {
     expect(() => foldAntigravityToolEvent(viaReplace, { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'other', status: 'completed' } })).toThrow(/toolId/)
   })
 
-  it('appends ACP activity as durable rows without a DSH tool-call or transcript dump', async () => {
+  it('appends ACP activity and native session readiness without a DSH tool-call or transcript dump', async () => {
     const appended: AntigravityToolEvent[] = []
+    let sessionReady = 0
     const adapter = createAntigravityLlmBridge(() => ({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
@@ -93,6 +94,7 @@ describe('ACP tool activity durable event family', () => {
         dispose: async () => undefined,
       }),
     }) as never, undefined, undefined, {
+      appendSessionReady: () => { sessionReady += 1 },
       appendToolEvents: (_sessionId, events) => {
         for (const event of events) appended.push(event)
       },
@@ -101,6 +103,7 @@ describe('ACP tool activity durable event family', () => {
     for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }] })) {
       chunks.push(chunk as { type: string; blockType?: string; block?: { type: string } })
     }
+    expect(sessionReady).toBe(1)
     expect(chunks.some(chunk => chunk.type === 'tool-call-delta')).toBe(false)
     expect(chunks.some(chunk => chunk.blockType === 'tool-call')).toBe(false)
     expect(chunks.some(chunk => chunk.block?.type === 'tool-call')).toBe(false)
@@ -109,5 +112,22 @@ describe('ACP tool activity durable event family', () => {
       { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'read', status: 'running', location: { target: '/workspace/src/a.ts', kind: 'file' } } },
       { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-1', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' }, output: 'ok' } },
     ])
+  })
+
+  it('does not append readiness when native session startup fails', async () => {
+    let sessionReady = 0
+    const adapter = createAntigravityLlmBridge(() => ({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      openSession: async () => { throw new Error('startup failed') },
+    }) as never, undefined, undefined, {
+      appendSessionReady: () => { sessionReady += 1 },
+    })
+
+    let chunks = 0
+    for await (const _chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [] })) chunks += 1
+    expect(chunks).toBeGreaterThan(0)
+    expect(sessionReady).toBe(0)
   })
 })

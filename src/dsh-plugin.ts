@@ -12,7 +12,7 @@ import { installAntigravityProvider, type InstalledAntigravityProvider } from '.
 import { registerAcpSettingsRpc } from './rpc.js'
 import { dshHome, loadPersistedConfig, savePersistedConfig } from './store.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
-import type { AntigravityToolEvent } from './tool-events.js'
+import { ANTIGRAVITY_SESSION_READY, type AntigravityToolEvent } from './tool-events.js'
 
 /** Loader-supplied Settings values. Empty paths stay on the page until the user locates them. */
 export interface DshPluginConfig {
@@ -57,7 +57,7 @@ function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown
   return (sessionId === undefined ? undefined : agents?.get?.(sessionId)) ?? agents?.roots?.()[0]
 }
 
-function appendToolEvents(ctx: DshPluginContext, sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void {
+function appendSessionEvents(ctx: DshPluginContext, sessionId: string | undefined, events: readonly { type: string; data: unknown }[]): void {
   const candidate = agentFor(ctx, sessionId)
   const session = candidate !== null && typeof candidate === 'object' && 'session' in candidate
     ? (candidate as { session?: unknown }).session
@@ -146,7 +146,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           const { sessionId: _ignored, ...rest } = request
           return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
-        appendToolEvents: (sessionId, events) => { appendToolEvents(ctx, sessionId, events) },
+        appendSessionReady: sessionId => { appendSessionEvents(ctx, sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }]) },
+        appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendSessionEvents(ctx, sessionId, events) },
       })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })

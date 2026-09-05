@@ -5,6 +5,7 @@ import { isRecord, stringValue } from './decode.js'
 
 const MAX_TOOL_TEXT = 4000
 
+export const ANTIGRAVITY_SESSION_READY = 'antigravity/session-ready' as const
 export const ANTIGRAVITY_TOOL_START = 'antigravity/tool-start' as const
 export const ANTIGRAVITY_TOOL_UPDATE = 'antigravity/tool-update' as const
 
@@ -30,6 +31,15 @@ export interface AntigravityToolUpdateData {
   readonly error?: string
 }
 
+export interface AntigravitySessionReadyData {
+  readonly provider: 'antigravity'
+}
+
+export type AntigravitySessionReadyEvent = {
+  readonly type: typeof ANTIGRAVITY_SESSION_READY
+  readonly data: AntigravitySessionReadyData
+}
+
 export type AntigravityToolEvent =
   | { readonly type: typeof ANTIGRAVITY_TOOL_START; readonly data: AntigravityToolStartData }
   | { readonly type: typeof ANTIGRAVITY_TOOL_UPDATE; readonly data: AntigravityToolUpdateData }
@@ -50,6 +60,12 @@ export interface AntigravityToolState extends AntigravityToolStartData {
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
+    /**
+     * Records that this DSH Session opened an Antigravity native session.
+     * @mode emit
+     * @param data - Provider identity used by replayable client projections.
+     */
+    'antigravity/session-ready': AntigravitySessionReadyData
     /**
      * Opens one native tool row.
      * @mode emit

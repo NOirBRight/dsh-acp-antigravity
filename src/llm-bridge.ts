@@ -32,6 +32,7 @@ export interface BridgeAskRequest {
 
 export interface BridgeHost {
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
+  appendSessionReady?(sessionId: string | undefined): void
   appendToolEvents?(sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void
 }
 
@@ -193,6 +194,7 @@ export function createAntigravityLlmBridge(
             ...(options.signal === undefined ? {} : { signal: options.signal }),
           })
           sessions.set(key, session)
+          hostAsk?.appendSessionReady?.(options.sessionId)
         }
         const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
         if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
