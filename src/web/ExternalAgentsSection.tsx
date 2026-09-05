@@ -61,7 +61,6 @@ function ProviderCard(props: {
   return (
     <li style={cardShell(row.ready && row.enabled, missing || !row.enabled)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 28, height: 28, borderRadius: 8, background: '#1a73e8', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700 }}>A</span>
         <span style={{ fontSize: 16, fontWeight: 600 }}>{row.title}</span>
         <span style={badge}>{statusBadge(row, t)}</span>
       </div>

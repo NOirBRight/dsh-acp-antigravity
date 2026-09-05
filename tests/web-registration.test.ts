@@ -4,6 +4,7 @@ import { apply, inject } from '../src/web/index.ts'
 function registrationBench() {
   const entries: Array<{ spec: Record<string, unknown>; component: unknown }> = []
   const definitions: unknown[] = []
+  const registerProvider = vi.fn(() => vi.fn())
   const ctx = {
     locale: { register: vi.fn(() => vi.fn()), bind: vi.fn(() => (key: string) => key) },
     slots: {
@@ -14,10 +15,11 @@ function registrationBench() {
     },
     connection: { rpc: { call: vi.fn() } },
     conversationEvents: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } },
+    get: (name: string) => name === 'providerDirectory' ? { register: registerProvider } : undefined,
     effect: (register: () => unknown) => register(),
   }
   apply(ctx as never)
-  return { entries, definitions }
+  return { entries, definitions, registerProvider }
 }
 
 describe('client plugin composition', () => {
@@ -48,6 +50,11 @@ describe('client plugin composition', () => {
     expect(definition.match(start)).toEqual({ id: 'tool-1', role: 'start' })
     const state = definition.start({}, { event: start })
     expect(definition.update({ state }, { event: end })).toMatchObject({ name: 'read', status: 'completed', output: 'ok' })
+  })
+
+  it('publishes the Antigravity card as an Agent provider', () => {
+    const { registerProvider } = registrationBench()
+    expect(registerProvider).toHaveBeenCalledWith({ key: 'antigravity', role: 'agent' })
   })
 
   it('declares the required browser services', () => {
