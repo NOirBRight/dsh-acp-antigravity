@@ -56,7 +56,7 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 
 ## Host composition
 
-A DSH web profile loads this package as a bundle. The host plugin registers RPC, and the `./client` entry registers a `settings.section` named External Agents (id `external-agents`) the same way other plugins add Settings pages. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC, and the `./client` entry contributes the Antigravity card to `settings.provider.item` and registers its Provider Directory role as Agent. The card does not publish quota until a real vendor usage API is available. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark.
 
 installAntigravityProvider() remains the library mount for hosts that own their own registry. The current DSH checkout still lacks the primary external-agent turn-driver and session-event hooks, so selecting Antigravity as a primary model is not claimed.
 

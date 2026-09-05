@@ -3,6 +3,7 @@ import { apply, inject } from '../src/web/index.ts'
 
 function registrationBench() {
   const entries: Array<{ spec: Record<string, unknown>; component: unknown }> = []
+  const registerProvider = vi.fn(() => vi.fn())
   const ctx = {
     locale: { register: vi.fn(() => vi.fn()), bind: vi.fn(() => (key: string) => key) },
     slots: {
@@ -12,10 +13,11 @@ function registrationBench() {
       subscribe: () => () => undefined,
     },
     connection: { rpc: { call: vi.fn() } },
+    get: (name: string) => name === 'providerDirectory' ? { register: registerProvider } : undefined,
     effect: (register: () => unknown) => register(),
   }
   apply(ctx as never)
-  return { entries }
+  return { entries, registerProvider }
 }
 
 describe('client plugin composition', () => {
@@ -31,6 +33,11 @@ describe('client plugin composition', () => {
       run: expect.any(Function),
       pick: expect.any(Function),
     }))
+  })
+
+  it('publishes the Antigravity card as an Agent provider', () => {
+    const { registerProvider } = registrationBench()
+    expect(registerProvider).toHaveBeenCalledWith({ key: 'antigravity', role: 'agent' })
   })
 
   it('declares the required browser services', () => {
