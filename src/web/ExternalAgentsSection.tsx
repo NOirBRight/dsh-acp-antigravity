@@ -14,7 +14,7 @@ export interface AcpSettingsFace {
 
 export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'> & InjectFace<AcpSettingsFace>
 
-const sectionStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, color: 'var(--dsw-alias-label-primary)' }
+const sectionStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, paddingRight: 64, color: 'var(--dsw-alias-label-primary)' }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, fontWeight: 600, lineHeight: '28px' }
 const introStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-tertiary)' }
 const cardsStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }
