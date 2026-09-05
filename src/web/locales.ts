@@ -22,11 +22,10 @@ export type AcpSettingsKey =
   | 'install'
   | 'installing'
   | 'signingIn'
-  | 'badgeAgent'
 
 export const zh: Record<AcpSettingsKey, string> = {
   nav: 'External Agents',
-  title: 'External Agents',
+  title: 'Antigravity',
   intro: 'Install 会从 Google 下载 ACP 运行时（agy_acp_server.par + localharness_external），不使用 agy CLI。完成后 Sign in。',
   rescan: 'Rescan',
   save: 'Save',
@@ -48,7 +47,6 @@ export const zh: Record<AcpSettingsKey, string> = {
   install: 'Install Antigravity',
   installing: 'Installing…',
   signingIn: 'Opening Google in your default browser…',
-  badgeAgent: 'Agent',
 }
 
 export const en: Record<AcpSettingsKey, string> = { ...zh }

@@ -18,7 +18,6 @@ const sectionStyle: CSSProperties = { display: 'flex', flexDirection: 'column', 
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, fontWeight: 600, lineHeight: '28px' }
 const introStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-tertiary)' }
 const cardsStyle: CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }
-const badge: CSSProperties = { marginLeft: 'auto', fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-tertiary)' }
 const meta: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)', minHeight: 18 }
 const field: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
 const input: CSSProperties = { height: 32, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, padding: '0 10px', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }
@@ -60,10 +59,7 @@ function ProviderCard(props: {
   const missing = !row.installed
   return (
     <li style={cardShell(row.ready && row.enabled, missing || !row.enabled)}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 16, fontWeight: 600 }}>{row.title}</span>
-        <span style={badge}>{statusBadge(row, t)}</span>
-      </div>
+      <div style={meta}>{statusBadge(row, t)}</div>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--dsw-alias-label-secondary)' }}>
         <input type='checkbox' checked={row.enabled} onChange={() => onChange({ ...row, enabled: !row.enabled })} />
         {row.enabled ? t('enabledBadge') : t('disabledBadge')}
@@ -156,7 +152,7 @@ export function ExternalAgentsSection(props: ExternalAgentsSectionProps): JSX.El
   return (
     <section style={sectionStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <h1 style={titleStyle}>{t('title')} <span style={badge}>{t('badgeAgent')}</span></h1>
+        <h1 style={titleStyle}>{t('title')}</h1>
         <span style={{ marginLeft: 'auto' }} />
         <button type='button' style={ghostBtn} onClick={() => { void refresh().catch(caught => setError(caught instanceof Error ? caught.message : t('failed'))) }}>{t('rescan')}</button>
         <button
