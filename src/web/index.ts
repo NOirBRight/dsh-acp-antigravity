@@ -20,7 +20,7 @@ import { en, zh, type AcpSettingsKey } from './locales.ts'
 
 type ClientContext = Omit<Context, 'connection'> & {
   readonly connection: ConnectionHandle
-  readonly conversationEvents: { register(definition: unknown): () => void }
+  readonly uiConversation: { events: { register(definition: unknown): () => void } }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -30,7 +30,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'dsh-acp-antigravity-client'
-export const inject = ['slots', 'locale', 'connection', 'conversationEvents']
+export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 
 function installProviderDirectory(ctx: ClientContext): void {
   let directory: { register(entry: { key: string; role: 'agent' }): () => void } | undefined
@@ -44,7 +44,7 @@ function installProviderDirectory(ctx: ClientContext): void {
 
 export function apply(ctx: ClientContext): void {
   installProviderDirectory(ctx)
-  ctx.effect(() => ctx.conversationEvents.register(antigravityToolDefinition), 'dsh-acp-antigravity: native tool event fold')
+  ctx.effect(() => ctx.uiConversation.events.register(antigravityToolDefinition), 'dsh-acp-antigravity: native tool event fold')
   ctx.effect(() => ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node',
     key: 'antigravity-tool',

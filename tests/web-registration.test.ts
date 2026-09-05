@@ -14,7 +14,7 @@ function registrationBench() {
       subscribe: () => () => undefined,
     },
     connection: { rpc: { call: vi.fn() } },
-    conversationEvents: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } },
+    uiConversation: { events: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } } },
     get: (name: string) => name === 'providerDirectory' ? { register: registerProvider } : undefined,
     effect: (register: () => unknown) => register(),
   }
@@ -58,6 +58,6 @@ describe('client plugin composition', () => {
   })
 
   it('declares the required browser services', () => {
-    expect(inject).toEqual(['slots', 'locale', 'connection', 'conversationEvents'])
+    expect(inject).toEqual(['slots', 'locale', 'connection', 'uiConversation'])
   })
 })
