@@ -2,6 +2,7 @@
 import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { join } from 'node:path'
+import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { openDefaultBrowser } from './browser.js'
@@ -58,15 +59,6 @@ function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown
   return (sessionId === undefined ? undefined : agents?.get?.(sessionId)) ?? agents?.roots?.()[0]
 }
 
-function appendSessionEvents(ctx: DshPluginContext, sessionId: string | undefined, events: readonly { type: string; data: unknown }[]): void {
-  const candidate = agentFor(ctx, sessionId)
-  const session = candidate !== null && typeof candidate === 'object' && 'session' in candidate
-    ? (candidate as { session?: unknown }).session
-    : undefined
-  if (session === null || typeof session !== 'object' || !('append' in session) || typeof session.append !== 'function') return
-  for (const event of events) session.append(event.type, event.data)
-}
-
 function toProviderConfig(config: AcpAntigravitySettingsConfig) {
   return {
     executablePath: config.executablePath,
@@ -80,6 +72,11 @@ function toProviderConfig(config: AcpAntigravitySettingsConfig) {
 /** Mount the Antigravity provider and the External Agents Settings RPC. */
 export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {}): Promise<void> {
   const home = dshHome()
+  const activity = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history'))
+  const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
+    if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
+    activity.append(sessionId, events)
+  }
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined
   let probeMessage: string | undefined
@@ -150,8 +147,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           const { sessionId: _ignored, ...rest } = request
           return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
-        appendSessionReady: sessionId => { appendSessionEvents(ctx, sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }]) },
-        appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendSessionEvents(ctx, sessionId, events) },
+        appendSessionReady: sessionId => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }]) },
+        appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendActivity(sessionId, events) },
       })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })
