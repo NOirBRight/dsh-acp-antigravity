@@ -81,6 +81,13 @@ describe('antigravity tool definition', () => {
 })
 
 describe('AntigravityToolNode', () => {
+  it('does not turn replayed script or data destinations into clickable links', () => {
+    for (const target of ['javascript:alert(1)', 'data:text/html,unsafe', 'not a URL']) {
+      const html = render({ toolId: 'tool-1', name: 'fetch', status: 'completed', location: { target, kind: 'url' } })
+      expect(html).not.toContain('<a ')
+    }
+  })
+
   it('renders the header trigger without nesting a link inside the button', () => {
     const html = render({ toolId: 'tool-1', name: 'read', status: 'running', location: { target: '/tmp/x', kind: 'file' } })
     expect(html).toContain('read')

@@ -66,6 +66,11 @@ function toolLocation(value: unknown): AntigravityToolLocation | undefined {
   const kind: unknown = value.kind
   if (typeof target !== 'string' || target.length === 0) return undefined
   if (kind !== 'file' && kind !== 'url') return undefined
+  if (kind === 'url') {
+    let url: URL
+    try { url = new URL(target) } catch { return undefined /* Malformed replayed tool destination. */ }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined
+  }
   return { target, kind }
 }
 
@@ -162,16 +167,17 @@ export const antigravityToolDefinition: ConversationNodeDefinition<AntigravityTo
 export function AntigravityToolNode({ node }: ChatNodeViewProps<'antigravity-tool'>) {
   const [expanded, setExpanded] = useState(false)
   const { data } = node
+  const location = toolLocation(data.location)
   const detail = data.error ?? data.output
   const terminal = data.status === 'completed' || data.status === 'failed'
   const canExpand = detail !== undefined || terminal
   const renderedDetail = detail ?? (terminal ? 'No displayable output.' : undefined)
-  const link = data.location === undefined ? null : createElement('a', {
-    href: data.location.kind === 'url' ? data.location.target : 'file://' + data.location.target,
+  const link = location === undefined ? null : createElement('a', {
+    href: location.kind === 'url' ? location.target : 'file://' + location.target,
     style: { color: 'var(--dsw-alias-label-primary)', textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    target: data.location.kind === 'url' ? '_blank' : undefined,
-    rel: data.location.kind === 'url' ? 'noreferrer' : undefined,
-  }, data.location.target)
+    target: location.kind === 'url' ? '_blank' : undefined,
+    rel: location.kind === 'url' ? 'noreferrer' : undefined,
+  }, location.target)
   return createElement('section', { style: rowStyle },
     createElement('button', {
       type: 'button', style: triggerStyle,
