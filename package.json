@@ -15,7 +15,7 @@
     "./client": { "types": "./dist/client-contract.d.ts", "default": "./lib/client.js" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "lib/client.js", "cordis.patch.yml", "README.md", "docs/notes", "LICENSE"],
+  "files": ["dist", "lib/client.js", "cordis.patch.yml", "README.md", "docs/notes", "docs/adr", "LICENSE"],
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json",

@@ -56,13 +56,17 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 
 ## Host composition
 
-A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and registers a replayable native tool row. ACP tool activity is durably recorded as `antigravity/tool-start` and `antigravity/tool-update`, never as a DSH `tool-call` block or assistant transcript text. The card does not publish quota until a real vendor usage API is available. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and registers a native tool-row renderer. ACP tool activity is durably recorded as `antigravity/tool-start` and `antigravity/tool-update`, never as a DSH `tool-call` block or assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark.
 
-installAntigravityProvider() remains the library mount for hosts that own their own registry. The current DSH checkout still lacks the primary external-agent turn-driver and session-event hooks, so selecting Antigravity as a primary model is not claimed.
+installAntigravityProvider() remains the library mount for hosts that own their own registry. The LLM bridge supports native turns, permission prompts, cancellation and resume. Host-restart replay remains subject to the limitation below.
+
+### Runtime history limitation
+
+The tested DSH 0.1.2-rc.1 reader requires an `ignorable` envelope marker for external event types, but its `Session.append()` API cannot write that marker. Antigravity startup and tool events therefore make persisted native-session history unreadable after a Host restart. The 3082 integration is not cleared for production native-session use until restart replay passes. Account quota and settings can be exercised independently; the plugin does not rewrite existing logs.
 
 ## Account quota decision
 
-[ADR 0001](docs/adr/0001-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The Host quota reader (`createAntigravityQuotaReader`) and the sanitized `quota` RPC endpoint are implemented; UI integration is owned by the parent.
+[ADR 0001](docs/adr/0001-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The Host quota reader (`createAntigravityQuotaReader`) supplies the sanitized `quota` RPC endpoint consumed by the settings card and Provider Usage panel.
 
 ## Real-binary smoke
 
