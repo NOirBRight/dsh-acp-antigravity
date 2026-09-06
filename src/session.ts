@@ -71,11 +71,8 @@ export class AntigravitySession implements ExternalAgentSession {
         }
         if (event.type === 'turn-result' && event.status === 'failed') providerFailure = event.content ?? 'Antigravity turn failed'
         events = events.then(() => boundedHost.publish(event)).then(undefined, (error: unknown) => {
-          // Abort-driven late publishes are expected teardown noise once the
-          // turn settles; anything else stays a loud turn failure below.
-          // The sink also keeps every chain observed on the abort path, where
-          // runTurn returns before the success-path drain.
-          if (isTurnAbortedError(error)) return
+          // Tolerate only publishes refused after this turn aborted; record anything else for the drain while keeping the chain observed on all exits.
+          if (request.signal.aborted && isTurnAbortedError(error)) return
           publishFailure ??= error instanceof Error ? error : new Error('Antigravity host publish failed')
         })
       } catch (protocolError) {

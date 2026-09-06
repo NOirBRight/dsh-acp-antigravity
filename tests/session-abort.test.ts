@@ -106,4 +106,25 @@ describe('Antigravity abort publish lifecycle', () => {
       await session.dispose()
     }
   })
+
+  it('never completes a turn the live host refused to publish', async () => {
+    const session = openSession(new PromptConnection())
+    try {
+      // Refuse only the update publish; the drain then fails the turn before
+      // the final turn-result publish, so only the sink decides the outcome.
+      let calls = 0
+      const result = await session.runTurn(
+        { turn: turnId('live-refusal-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal },
+        host(async () => {
+          calls += 1
+          if (calls === 1) throw new TurnAbortedError('turn aborted')
+        }),
+      )
+      expect(calls).toBe(1)
+      expect(result.status).not.toBe('completed')
+      expect(result).toMatchObject({ status: 'failed' })
+    } finally {
+      await session.dispose()
+    }
+  })
 })
