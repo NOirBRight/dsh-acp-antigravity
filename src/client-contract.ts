@@ -6,6 +6,7 @@ export const SAVE_ENDPOINT = 'save'
 export const RUN_ENDPOINT = 'run'
 export const PICK_ENDPOINT = 'pick'
 export const CATALOG_ENDPOINT = 'catalog'
+export const QUOTA_ENDPOINT = 'quota'
 
 /** Persisted Settings values for one Antigravity instance. */
 export interface AcpAntigravitySettingsConfig {
@@ -112,5 +113,99 @@ export function decodeConfig(value: unknown): AcpAntigravitySettingsConfig | und
     instanceId: value.instanceId.trim(),
     ...(value.model === undefined ? {} : { model: value.model.trim() }),
     enabled: value.enabled,
+  }
+}
+
+/** One preserved quota bucket from the vendor quota-summary API. Missing fields stay absent, never zero. */
+export interface AntigravityQuotaBucket {
+  readonly bucketId?: string
+  readonly displayName?: string
+  readonly description?: string
+  readonly window?: string
+  readonly remainingFraction?: number
+  readonly remainingAmount?: string
+  readonly disabled?: boolean
+  readonly resetTime?: string
+}
+
+/** One preserved quota group with its buckets. */
+export interface AntigravityQuotaGroup {
+  readonly displayName?: string
+  readonly description?: string
+  readonly buckets: readonly AntigravityQuotaBucket[]
+}
+
+/** Readiness of a quota snapshot. Failures are explicit; grouping is never estimated. */
+export type AntigravityQuotaStatus = 'ready' | 'authentication-required' | 'not-entitled' | 'error'
+
+/** Sanitized account quota for the Settings UI. Never carries credentials, project ids, or raw auth payloads. */
+export interface AntigravityQuotaSnapshot {
+  readonly status: AntigravityQuotaStatus
+  readonly groups: readonly AntigravityQuotaGroup[]
+  readonly observedAt: string
+  readonly tier?: { readonly current?: string; readonly paid?: string }
+  readonly message?: string
+}
+
+function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const value: unknown = record[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+function decodeQuotaBucket(value: unknown): AntigravityQuotaBucket | undefined {
+  if (!isRecord(value)) return undefined
+  const remainingFraction = typeof value.remainingFraction === 'number' && Number.isFinite(value.remainingFraction) ? value.remainingFraction : undefined
+  const remainingAmount = typeof value.remainingAmount === 'string' || typeof value.remainingAmount === 'number' ? String(value.remainingAmount) : undefined
+  const disabled = typeof value.disabled === 'boolean' ? value.disabled : undefined
+  const bucketId = optionalString(value, 'bucketId')
+  const displayName = optionalString(value, 'displayName')
+  const description = optionalString(value, 'description')
+  const window = optionalString(value, 'window')
+  const resetTime = optionalString(value, 'resetTime')
+  return {
+    ...(bucketId === undefined ? {} : { bucketId }),
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(description === undefined ? {} : { description }),
+    ...(window === undefined ? {} : { window }),
+    ...(remainingFraction === undefined ? {} : { remainingFraction }),
+    ...(remainingAmount === undefined ? {} : { remainingAmount }),
+    ...(disabled === undefined ? {} : { disabled }),
+    ...(resetTime === undefined ? {} : { resetTime }),
+  }
+}
+
+/** Decode a quota snapshot from the host RPC. */
+export function decodeQuotaSnapshot(value: unknown): AntigravityQuotaSnapshot | undefined {
+  if (!isRecord(value)) return undefined
+  const status = value.status
+  if (status !== 'ready' && status !== 'authentication-required' && status !== 'not-entitled' && status !== 'error') return undefined
+  if (typeof value.observedAt !== 'string' || !Array.isArray(value.groups)) return undefined
+  const groups: AntigravityQuotaGroup[] = []
+  for (const group of value.groups) {
+    if (!isRecord(group) || !Array.isArray(group.buckets)) return undefined
+    const buckets: AntigravityQuotaBucket[] = []
+    for (const bucket of group.buckets) {
+      const decoded = decodeQuotaBucket(bucket)
+      if (decoded === undefined) return undefined
+      buckets.push(decoded)
+    }
+    const displayName = optionalString(group, 'displayName')
+    const description = optionalString(group, 'description')
+    groups.push({
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(description === undefined ? {} : { description }),
+      buckets,
+    })
+  }
+  const tier = isRecord(value.tier) ? value.tier : undefined
+  const current = tier === undefined ? undefined : optionalString(tier, 'current')
+  const paid = tier === undefined ? undefined : optionalString(tier, 'paid')
+  const message = optionalString(value, 'message')
+  return {
+    status,
+    groups,
+    observedAt: value.observedAt,
+    ...(current === undefined && paid === undefined ? {} : { tier: { ...(current === undefined ? {} : { current }), ...(paid === undefined ? {} : { paid }) } }),
+    ...(message === undefined ? {} : { message }),
   }
 }

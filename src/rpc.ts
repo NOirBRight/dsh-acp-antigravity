@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import {
   ACP_SETTINGS_RPC_CHANNEL,
   PICK_ENDPOINT,
+  QUOTA_ENDPOINT,
   RUN_ENDPOINT,
   SAVE_ENDPOINT,
   CATALOG_ENDPOINT,
@@ -11,6 +12,7 @@ import {
   decodeConfig,
   type AcpAntigravitySettingsConfig,
   type AcpSettingsSnapshot,
+  type AntigravityQuotaSnapshot,
 } from './client-contract.js'
 
 type RpcResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details?: object } }
@@ -27,6 +29,7 @@ function errorText(error: unknown): string {
 export interface AcpSettingsRpcDeps {
   snapshot(): Promise<AcpSettingsSnapshot>
   catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string }[] }[] }>
+  quota(): Promise<AntigravityQuotaSnapshot>
   applyConfig(config: AcpAntigravitySettingsConfig): Promise<void>
   run(action: string, value?: unknown, signal?: AbortSignal): Promise<unknown>
 }
@@ -36,6 +39,13 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
   return async (endpoint, payload, signal) => {
     if (endpoint === SNAPSHOT_ENDPOINT) return { ok: true, value: await deps.snapshot() }
     if (endpoint === CATALOG_ENDPOINT) return { ok: true, value: await deps.catalog() }
+    if (endpoint === QUOTA_ENDPOINT) {
+      try {
+        return { ok: true, value: await deps.quota() }
+      } catch (error) {
+        return fail(errorText(error))
+      }
+    }
     if (endpoint === SAVE_ENDPOINT) {
       const decoded = decodeConfig(payload)
       if (decoded === undefined) return fail('invalid Antigravity settings')

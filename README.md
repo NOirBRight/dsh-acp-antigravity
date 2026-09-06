@@ -62,7 +62,7 @@ installAntigravityProvider() remains the library mount for hosts that own their 
 
 ## Account quota decision
 
-[ADR 0001](docs/adr/0001-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The usage reader and UI integration are not implemented yet.
+[ADR 0001](docs/adr/0001-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The Host quota reader (`createAntigravityQuotaReader`) and the sanitized `quota` RPC endpoint are implemented; UI integration is owned by the parent.
 
 ## Real-binary smoke
 

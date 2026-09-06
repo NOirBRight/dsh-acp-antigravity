@@ -1,6 +1,6 @@
 # Query account quota with the ACP profile, without a CLI dependency
 
-Status: accepted; plugin implementation pending.
+Status: accepted; Host quota/credentials/RPC implementation done, UI integration pending.
 
 Antigravity account quota is distinct from ACP turn token consumption. The Host will reuse the selected isolated ACP personal-OAuth profile to query the vendor quota-summary API and expose normalized quota windows through ProviderDirectory usage registration; users must not install the CLI or maintain a separate login for quota.
 

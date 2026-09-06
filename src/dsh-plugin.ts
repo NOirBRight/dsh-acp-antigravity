@@ -9,6 +9,7 @@ import { createAntigravityLlmBridge } from './llm-bridge.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
+import { createAntigravityQuotaReader, type AntigravityQuotaReader } from './quota.js'
 import { registerAcpSettingsRpc } from './rpc.js'
 import { dshHome, loadPersistedConfig, savePersistedConfig } from './store.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
@@ -90,12 +91,15 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
   let models: { id: string; name: string }[] = []
+  let quotaReader: AntigravityQuotaReader = createAntigravityQuotaReader(toProviderConfig(live), { getRuntimeVersion: () => installed?.provider.health.version })
 
   const mount = async (next: AcpAntigravitySettingsConfig): Promise<void> => {
     await installed?.dispose()
     installed = undefined
     authorizationUrl = undefined
     live = next
+    quotaReader.invalidate()
+    quotaReader = createAntigravityQuotaReader(toProviderConfig(next), { getRuntimeVersion: () => installed?.provider.health.version })
     installed = installAntigravityProvider(
       { externalAgents: registry, settingsEditors: editors },
       toProviderConfig(next),
@@ -154,6 +158,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   }
   registerAcpSettingsRpc(ctx, {
     snapshot,
+    quota: () => quotaReader.snapshot(),
     catalog: async () => {
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
@@ -190,7 +195,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           const provider = installed.provider
           signInJob = provider.signIn().then(async () => {
             try { models = (await provider.listModels()).map(model => ({ id: String(model.id), name: model.name })) } catch { /* picker stays empty until a later catalog load */ }
-          }).catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined })
+          }).catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined; quotaReader.invalidate() })
         }
         return { started: true }
       }
@@ -222,8 +227,15 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         }
         return found
       }
+      if (action === 'sign-in' || action === 'sign-out') {
+        try {
+          return await editor.run(action, signal)
+        } finally {
+          quotaReader.invalidate()
+        }
+      }
       return editor.run(action, signal)
     },
   })
-  ctx.effect(() => () => { void installed?.dispose() }, 'dsh-acp-antigravity: provider')
+  ctx.effect(() => () => { quotaReader.invalidate(); void installed?.dispose() }, 'dsh-acp-antigravity: provider')
 }
