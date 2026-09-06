@@ -1,6 +1,5 @@
 /** Replayable durable events for Antigravity native tool activity. */
 
-import type {} from '@deepseek-ai/dsh-session/types'
 import { isRecord, stringValue } from './decode.js'
 
 const MAX_TOOL_TEXT = 4000
@@ -56,29 +55,6 @@ export interface AntigravityToolActivity {
 export interface AntigravityToolState extends AntigravityToolStartData {
   readonly output?: string
   readonly error?: string
-}
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /**
-     * Records that this DSH Session opened an Antigravity native session.
-     * @mode emit
-     * @param data - Provider identity used by replayable client projections.
-     */
-    'antigravity/session-ready': AntigravitySessionReadyData
-    /**
-     * Opens one native tool row.
-     * @mode emit
-     * @param data - Stable ACP tool identity and normalized display data.
-     */
-    'antigravity/tool-start': AntigravityToolStartData
-    /**
-     * Updates one native tool row.
-     * @mode emit
-     * @param data - Stable ACP tool identity, status, and normalized result data.
-     */
-    'antigravity/tool-update': AntigravityToolUpdateData
-  }
 }
 
 /**

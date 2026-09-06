@@ -19,6 +19,7 @@ describe('DSH settings plugin', () => {
     process.env.DSH_HOME = home
     const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
     const ctx = {
+      on: () => () => {},
       effect: (fn: () => unknown) => fn(),
       connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
     }
@@ -51,6 +52,7 @@ describe('DSH settings plugin', () => {
     await chmod(harness, 0o755)
     const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
     const ctx = {
+      on: () => () => {},
       effect: (fn: () => unknown) => fn(),
       connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
     }

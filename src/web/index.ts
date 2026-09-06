@@ -1,10 +1,9 @@
-/** Browser half: External Agents page inside Settings. */
+/** Browser half: External Agents page inside Settings, plus the native activity sidecar view. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from 'dsh-llm-providers-ui/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
@@ -20,7 +19,8 @@ import {
   type AcpSettingsRow,
 } from '../client-contract.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
-import { AntigravityToolNode, antigravityToolDefinition } from './AntigravityToolNode.tsx'
+import { ACTIVITY_ENDPOINT, decodeActivityHistory, type AntigravityActivityHistory } from '../activity-contract.ts'
+import { AntigravityActivityView, type AntigravityActivityFace } from './AntigravityActivityView.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
 
@@ -35,7 +35,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'dsh-acp-antigravity-client'
-export const inject = ['slots', 'locale', 'connection', 'uiConversation']
+export const inject = ['slots', 'locale', 'connection']
 
 function installProviderDirectory(ctx: ClientContext): void {
   ctx.inject(['providerDirectory'], scope => {
@@ -46,11 +46,6 @@ function installProviderDirectory(ctx: ClientContext): void {
 
 export function apply(ctx: ClientContext): void {
   installProviderDirectory(ctx)
-  ctx.effect(() => ctx.uiConversation.events.register(antigravityToolDefinition), 'dsh-acp-antigravity: native tool event fold')
-  ctx.effect(() => ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
-    name: 'conversation.chat.node',
-    key: 'antigravity-tool',
-  }, AntigravityToolNode)), 'dsh-acp-antigravity: native tool row')
   const localeNamespace = 'settings.external-agents'
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'dsh-acp-antigravity: Settings page copy')
   const t = ctx.locale.bind(localeNamespace) as AcpSettingsFace['t']
@@ -94,6 +89,25 @@ export function apply(ctx: ClientContext): void {
     const path = (result.value as { path?: string | null }).path
     return path ?? null
   }
+  ctx.effect(() => ctx.slots.inject('conversation.view', () => ctx.slots.register({
+    name: 'conversation.view',
+    id: 'antigravity',
+    order: 11,
+    locale: localeNamespace,
+    label: () => t('activityView'),
+    inject: (sessionId: string): AntigravityActivityFace => ({
+      t,
+      read: async signal => {
+        const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, ACTIVITY_ENDPOINT, { sessionId }, signal)
+        if (!result.ok) throw new Error(result.error.message)
+        try {
+          return decodeActivityHistory(result.value)
+        } catch {
+          throw new Error(t('activityFailed')) /* Corrupt sidecar history stays a local tab error. */
+        }
+      },
+    }),
+  }, AntigravityActivityView)), 'dsh-acp-antigravity: native activity sidecar view')
   ctx.slots.inject('settings.provider.item', () => ctx.slots.register({
     name: 'settings.provider.item',
     key: 'antigravity',

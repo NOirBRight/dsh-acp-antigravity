@@ -12,9 +12,11 @@ it('stores native activity independently without appending any Core session even
   const home = mkdtempSync(join(tmpdir(), 'agy-history-host-'))
   vi.stubEnv('DSH_HOME', home)
   const append = vi.fn()
+  const on = vi.fn(() => () => {})
   const agent = { session: { append } }
   const scope = { effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} } }
   const ctx: DshPluginContext = {
+    on,
     effect: scope.effect,
     inject: (_deps, run) => run(scope),
     get: () => ({ get: () => agent, roots: () => [agent] }),
@@ -22,6 +24,7 @@ it('stores native activity independently without appending any Core session even
   }
   try {
     await apply(ctx, { enabled: false })
+    expect(on).toHaveBeenCalledWith('llm/stream', expect.any(Function))
     const sink = vi.mocked(createAntigravityLlmBridge).mock.calls.at(-1)![3]!
     sink.appendSessionReady!('session-native')
     sink.appendToolEvents!('session-native', [{ type: 'antigravity/tool-start', data: { toolId: 'read', name: 'Read', status: 'completed' } }])

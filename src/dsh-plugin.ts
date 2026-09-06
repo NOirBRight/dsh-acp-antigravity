@@ -2,6 +2,7 @@
 import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { join } from 'node:path'
+import type { ActivityBindingHostContext } from './activity-binding.js'
 import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
@@ -27,7 +28,7 @@ export interface DshPluginConfig {
 }
 
 /** Host context used by the Settings RPC plugin. */
-export interface DshPluginContext {
+export interface DshPluginContext extends ActivityBindingHostContext {
   effect(fn: () => unknown, name?: string): void
   inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => void): void
   get?(name: string): unknown
@@ -73,6 +74,8 @@ function toProviderConfig(config: AcpAntigravitySettingsConfig) {
 export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {}): Promise<void> {
   const home = dshHome()
   const activity = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history'))
+  const { installActivityBindingGuard } = await import('./activity-binding.js')
+  installActivityBindingGuard(ctx, activity)
   const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
     if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
     activity.append(sessionId, events)
@@ -156,6 +159,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   registerAcpSettingsRpc(ctx, {
     snapshot,
     quota: () => quotaReader.snapshot(),
+    readActivity: sessionId => activity.read(sessionId),
     catalog: async () => {
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }

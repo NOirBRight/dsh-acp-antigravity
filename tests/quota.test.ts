@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveAntigravityProfileDirectory } from '../src/auth.js'
+import { ACTIVITY_SCHEMA_VERSION } from '../src/activity-contract.js'
 import {
   QUOTA_ENDPOINT,
   decodeQuotaSnapshot,
@@ -332,6 +333,7 @@ describe('quota RPC contract', () => {
       snapshot: async () => ({ title: 'External Agents', rows: [] }),
       catalog: async () => ({ groups: [] }),
       quota: async () => fixed,
+      readActivity: () => ({ version: ACTIVITY_SCHEMA_VERSION, records: [] }),
       applyConfig: async () => {},
       run: async () => ({}),
     })

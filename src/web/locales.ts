@@ -9,6 +9,7 @@ export const en = {
   resetsAt: 'Resets', updatedAt: 'Updated', account: 'Account', enableProvider: 'Enable provider', advanced: 'Advanced / runtime', unsaved: 'Unsaved changes',
   modelCount: '{count} models', refreshModels: 'Refresh models', defaultModel: 'Default model', accountDefault: 'Account default',
   nativeModels: 'Model availability and capabilities are supplied by the native ACP runtime. This card does not override unsupported model capabilities.',
+  activityView: 'Antigravity Activity', activityRefresh: 'Refresh', activityLoading: 'Loading activity…', activityEmpty: 'No tool activity yet.', activityFailed: 'Activity unavailable', activityNoOutput: 'No displayable output.',
 }
 export type AcpSettingsKey = keyof typeof en
 export const zh: Record<AcpSettingsKey, string> = {
@@ -21,4 +22,5 @@ export const zh: Record<AcpSettingsKey, string> = {
   resetsAt: '重置时间', updatedAt: '更新时间', account: '账户', enableProvider: '启用 Provider', advanced: '高级设置 / 运行时', unsaved: '有未保存修改',
   modelCount: '{count} 个模型', refreshModels: '更新模型目录', defaultModel: '默认模型', accountDefault: '跟随账户默认',
   nativeModels: '模型目录与能力由原生 ACP 运行时提供；此处不覆盖运行时未支持的模型能力。',
+  activityView: 'Antigravity 动态', activityRefresh: '刷新', activityLoading: '正在加载动态…', activityEmpty: '暂无工具动态。', activityFailed: '动态暂不可用', activityNoOutput: '无可显示的输出。',
 }

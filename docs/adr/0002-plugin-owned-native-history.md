@@ -1,0 +1,13 @@
+# Keep native activity independent of Core history
+
+**Status:** accepted; supersedes the inline activity presentation in [the native-agent decision](0001-native-agent-on-dsh.md).
+
+DSH owns the basic conversation; the Antigravity plugin owns native activity and runtime bindings in separate versioned storage. The rc1 writer cannot mark external events ignorable, and public inline tool slots require genuine DSH tool calls, so native activity uses the public `conversation.view` slot rather than custom Core events, fabricated tool calls, package replacement or private hooks. This gives up interleaved inline placement to keep basic history readable independently of the plugin.
+
+## Consequences
+
+Reading activity does not start the runtime or check an account. Continuing a bound session checks its binding through the public `llm/stream` waterfall before invoking another provider; unreadable binding data fails execution closed, not history reading. Removing the plugin removes its extra display and enforcement, not the basic conversation; missing native binaries prevents native execution without preventing history access.
+
+Activity RPC uses the same full-Host browser authentication as the rc1 session interface; a session identifier is an address, not a credential, and no per-session caller isolation is claimed. Storage errors stay local to the activity view. Existing Core logs containing unsupported required custom events are not rewritten.
+
+Acceptance requires a new native conversation, Host restart, and reads with the native runtime unavailable; verify the basic conversation independently of plugin rendering and reject execution on an incompatible bound route. No production deployment is authorized by this decision.

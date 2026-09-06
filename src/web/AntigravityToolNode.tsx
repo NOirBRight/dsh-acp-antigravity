@@ -1,33 +1,15 @@
-/** Conversation node renderer for Antigravity native tool activity. */
-import { createElement, useState } from 'react'
-import type { ChatConversationViewNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type {
-  ConversationLocation,
-  ConversationNodeDefinition,
-  ConversationStartMatch,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import {
-  ANTIGRAVITY_TOOL_START,
-  ANTIGRAVITY_TOOL_UPDATE,
-  foldAntigravityToolEvent,
-  type AntigravityToolEvent,
-  type AntigravityToolLocation,
-  type AntigravityToolStartData,
-  type AntigravityToolState,
-  type AntigravityToolStatus,
-  type AntigravityToolUpdateData,
-} from '../tool-events.js'
-import { isRecord } from '../decode.js'
+/** Disclosure row for one folded Antigravity native tool. Pure renderer: no Core, no Chat. */
+import { createElement, type CSSProperties, type JSX, type ReactNode } from 'react'
+import type { AntigravityToolState, AntigravityToolStatus } from '../tool-events.js'
 
-/** Official Chat renderer payload seam: registers the antigravity-tool kind. */
-declare module '@deepseek-ai/dsh-client-ui-chat/client' {
-  interface ChatNodeDataMap {
-    /** One Antigravity native tool row folded from tool-start/update events. */
-    'antigravity-tool': AntigravityToolState
-  }
+/** One folded sidecar row: unique key, display state, and last-event time. */
+export interface AntigravityToolRowData {
+  readonly key: string
+  readonly state: AntigravityToolState
+  readonly time: string
 }
 
-const rowStyle = {
+const rowStyle: CSSProperties = {
   border: '1px solid var(--dsw-alias-border-l2)',
   borderRadius: 8,
   background: 'var(--dsw-alias-bg-layer-1)',
@@ -35,168 +17,54 @@ const rowStyle = {
   fontSize: 13,
   lineHeight: '20px',
   overflow: 'hidden',
-} as const
+}
 
-const triggerStyle = {
-  display: 'flex', alignItems: 'center', width: '100%', minHeight: 36,
-  border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer',
-  padding: '8px 10px', textAlign: 'left', gap: 8,
-} as const
+const summaryStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', width: '100%', minHeight: 44,
+  cursor: 'pointer', padding: '8px 10px', gap: 8, boxSizing: 'border-box',
+}
 
-const linkRowStyle = {
-  padding: '0 10px 8px 26px',
-} as const
-
-const dotStyle: Record<AntigravityToolStatus, { background: string }> = {
+const dotStyle: Record<AntigravityToolStatus, CSSProperties> = {
   pending: { background: 'var(--dsw-alias-label-tertiary)' },
   running: { background: 'var(--dsw-alias-state-warn-primary)' },
   completed: { background: 'var(--dsw-alias-state-success-primary)' },
   failed: { background: 'var(--dsw-alias-state-error-primary)' },
 }
 
-/** Whether a wire value is one of the four row statuses. */
-function isToolStatus(value: unknown): value is AntigravityToolStatus {
-  return value === 'pending' || value === 'running' || value === 'completed' || value === 'failed'
+const bodyStyle: CSSProperties = {
+  borderTop: '1px solid var(--dsw-alias-border-l2)',
+  padding: '8px 12px 12px 26px',
+  display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
 }
 
-/** Read a validated tool link, if the payload carries a usable one. */
-function toolLocation(value: unknown): AntigravityToolLocation | undefined {
-  if (!isRecord(value)) return undefined
-  const target: unknown = value.target
-  const kind: unknown = value.kind
-  if (typeof target !== 'string' || target.length === 0) return undefined
-  if (kind !== 'file' && kind !== 'url') return undefined
-  if (kind === 'url') {
-    let url: URL
-    try { url = new URL(target) } catch { return undefined /* Malformed replayed tool destination. */ }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined
+const preStyle: CSSProperties = {
+  maxHeight: 240, overflow: 'auto', margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+}
+
+/** One folded tool row; detail disclosure needs no state. */
+export function AntigravityToolNode({ row, noOutput }: { readonly row: AntigravityToolRowData; readonly noOutput: string }): JSX.Element {
+  const { state } = row
+  const label = state.name + ', ' + state.status
+  const summary = [
+    createElement('span', { key: 'dot', 'aria-hidden': true, style: { width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', ...dotStyle[state.status] } }),
+    createElement('span', { key: 'name', style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, state.name),
+    createElement('span', { key: 'status', style: { color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto', whiteSpace: 'nowrap' } }, state.status),
+    createElement('time', { key: 'time', dateTime: row.time, style: { color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, new Date(row.time).toLocaleString()),
+  ]
+  const detail = state.error ?? state.output
+  const terminal = state.status === 'completed' || state.status === 'failed'
+  const location = state.location
+  const link: ReactNode = location === undefined ? null : location.kind === 'url' && /^https?:\/\//u.test(location.target)
+    ? createElement('a', { style: { color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere' }, href: location.target, target: '_blank', rel: 'noreferrer' }, location.target)
+    : createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'anywhere' } }, location.target)
+  if (link === null && detail === undefined && !terminal) {
+    return createElement('section', { style: rowStyle, 'aria-label': label },
+      createElement('div', { style: { ...summaryStyle, cursor: 'default' } }, summary))
   }
-  return { target, kind }
-}
-
-/** Read validated start data, or null when the payload is unrelated or malformed. */
-function startData(data: unknown): AntigravityToolStartData | null {
-  if (!isRecord(data)) return null
-  const toolId: unknown = data.toolId
-  const name: unknown = data.name
-  if (typeof toolId !== 'string' || toolId.length === 0) return null
-  if (typeof name !== 'string' || name.length === 0) return null
-  if (!isToolStatus(data.status)) return null
-  const location = toolLocation(data.location)
-  return { toolId, name, status: data.status, ...(location === undefined ? {} : { location }) }
-}
-
-/** Read validated update data, or null when the payload is unrelated or malformed. */
-function updateData(data: unknown): AntigravityToolUpdateData | null {
-  if (!isRecord(data)) return null
-  const toolId: unknown = data.toolId
-  if (typeof toolId !== 'string' || toolId.length === 0) return null
-  if (!isToolStatus(data.status)) return null
-  const location = toolLocation(data.location)
-  const output: unknown = data.output
-  const error: unknown = data.error
-  if (output !== undefined && typeof output !== 'string') return null
-  if (error !== undefined && typeof error !== 'string') return null
-  return {
-    toolId,
-    status: data.status,
-    ...(location === undefined ? {} : { location }),
-    ...(output === undefined ? {} : { output }),
-    ...(error === undefined ? {} : { error }),
-  }
-}
-
-/** Narrow one session event to a tool lifecycle event without throwing. */
-function toToolEvent(event: { readonly type?: unknown; readonly data?: unknown }): AntigravityToolEvent | null {
-  if (event.type === ANTIGRAVITY_TOOL_START) {
-    const data = startData(event.data)
-    return data === null ? null : { type: ANTIGRAVITY_TOOL_START, data }
-  }
-  if (event.type === ANTIGRAVITY_TOOL_UPDATE) {
-    const data = updateData(event.data)
-    return data === null ? null : { type: ANTIGRAVITY_TOOL_UPDATE, data }
-  }
-  return null
-}
-
-/** Read a finite event seq for anchoring, if the event carries one. */
-function eventSeq(event: { readonly seq?: unknown } | undefined): number | undefined {
-  return event !== undefined && typeof event.seq === 'number' && Number.isFinite(event.seq) ? event.seq : undefined
-}
-
-/** Read validated start state for one start match, failing loud on engine-mismatched data. */
-function startState(match: ConversationStartMatch): AntigravityToolState {
-  const parsed = toToolEvent(match.event)
-  if (parsed === null || parsed.type !== ANTIGRAVITY_TOOL_START) throw new Error('Antigravity tool row starts without a tool-start event')
-  return parsed.data
-}
-
-/** Folded row definition registered on the Chat conversation target. */
-export const antigravityToolDefinition: ConversationNodeDefinition<AntigravityToolState> = {
-  kind: 'antigravity-tool',
-  target: 'chat',
-  match: event => {
-    const parsed = toToolEvent(event)
-    if (parsed === null) return null
-    return { id: parsed.data.toolId, role: parsed.type === ANTIGRAVITY_TOOL_START ? 'start' : 'update' }
-  },
-  start: (_context, match) => startState(match),
-  update: (context, match) => {
-    const parsed = toToolEvent(match.event)
-    return parsed === null ? context.state : foldAntigravityToolEvent(context.state, parsed)
-  },
-  publication: match => match.event.type === ANTIGRAVITY_TOOL_UPDATE ? 'immediate' : 'animation-frame',
-  buildViewNode: (context): ChatConversationViewNode | null => {
-    if (context.state === undefined) return null
-    const location: ConversationLocation = context.start?.location ?? context.matches[0]?.location ?? { kind: 'unresolved' }
-    const node: ChatConversationViewNode = {
-      key: context.key,
-      kind: 'antigravity-tool',
-      id: context.id,
-      target: 'chat',
-      anchorSeq: eventSeq(context.start?.event) ?? eventSeq(context.matches[0]?.event) ?? 0,
-      location,
-      visibility: 'visible',
-      data: context.state,
-    }
-    return node
-  },
-}
-
-/** ToolRow-like disclosure for one folded native tool row. */
-export function AntigravityToolNode({ node }: ChatNodeViewProps<'antigravity-tool'>) {
-  const [expanded, setExpanded] = useState(false)
-  const { data } = node
-  const location = toolLocation(data.location)
-  const detail = data.error ?? data.output
-  const terminal = data.status === 'completed' || data.status === 'failed'
-  const canExpand = detail !== undefined || terminal
-  const renderedDetail = detail ?? (terminal ? 'No displayable output.' : undefined)
-  const link = location === undefined ? null : createElement('a', {
-    href: location.kind === 'url' ? location.target : 'file://' + location.target,
-    style: { color: 'var(--dsw-alias-label-primary)', textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    target: location.kind === 'url' ? '_blank' : undefined,
-    rel: location.kind === 'url' ? 'noreferrer' : undefined,
-  }, location.target)
   return createElement('section', { style: rowStyle },
-    createElement('button', {
-      type: 'button', style: triggerStyle,
-      onClick: canExpand ? () => { setExpanded(value => !value) } : undefined,
-      'aria-expanded': canExpand ? expanded : undefined,
-      'aria-label': data.name + ', ' + data.status,
-    },
-    createElement('span', { 'aria-hidden': true, style: { width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', ...dotStyle[data.status] } }),
-    createElement('span', { style: { fontWeight: 500, whiteSpace: 'nowrap' } }, data.name),
-    createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto', whiteSpace: 'nowrap' } }, data.status),
-    createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)' } }, canExpand ? (expanded ? '⌃' : '⌄') : null),
-    ),
-    link === null ? null : createElement('div', { style: linkRowStyle }, link),
-    expanded && renderedDetail !== undefined
-      ? createElement('pre', { style: {
-        maxHeight: 240, overflow: 'auto', margin: 0, padding: '8px 12px 12px 28px',
-        borderTop: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)',
-        color: data.error === undefined ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-state-error-primary)', whiteSpace: 'pre-wrap',
-      } }, renderedDetail)
-      : null,
-  )
+    createElement('details', { style: { margin: 0 } },
+      createElement('summary', { style: summaryStyle, 'aria-label': label }, summary),
+      createElement('div', { style: bodyStyle }, link, detail === undefined
+        ? (terminal ? createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)' } }, noOutput) : null)
+        : createElement('pre', { style: { ...preStyle, color: state.error === undefined ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-state-error-primary)' } }, detail))))
 }

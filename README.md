@@ -56,7 +56,7 @@ Use createAntigravitySettingsEditor() to expose installation validation, negotia
 
 ## Host composition
 
-A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and registers a native tool-row renderer. ACP tool activity is stored in plugin-owned history, never as a DSH `tool-call` block or assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and contributes an Antigravity Activity conversation tab. ACP tool activity is stored in plugin-owned history, never as a DSH `tool-call` block or assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark.
 
 installAntigravityProvider() remains the library mount for hosts that own their own registry. The LLM bridge supports native turns, permission prompts, cancellation and resume. Host-restart replay remains subject to the limitation below.
 
@@ -64,9 +64,11 @@ installAntigravityProvider() remains the library mount for hosts that own their 
 
 Startup and tool activity records live under `$DSH_HOME/plugin-data/antigravity/history`, independently of native binaries, account profiles and DSH session logs. Session identifiers select hashed filenames; records carry a schema version and sequence. Files are private, symlinks are rejected, and malformed or incomplete histories fail without being rewritten. One writer owns each history root; appends currently read the session file to determine its next sequence.
 
-The host does not append these custom records to Core. Existing DSH logs containing unmarked `antigravity/*` events remain unreadable on rc1 and are not rewritten. The separate activity view and restart acceptance remain pending; this integration is not cleared for production native-session use. Account quota and settings can be exercised independently.
+The host does not append these custom records to Core. Existing DSH logs containing unmarked `antigravity/*` events remain unreadable on rc1 and are not rewritten. The Antigravity Activity tab loads saved tools independently and supports manual refresh. Full native-session restart acceptance remains pending; this integration is not cleared for production native-session use. Account quota and settings can be exercised independently.
 
-`pnpm exec vitest run tests/activity-store.test.ts tests/activity-host.test.ts` checks on-disk restoration and isolation from Core event writes without starting Antigravity.
+`pnpm exec vitest run tests/activity-store.test.ts tests/activity-host.test.ts tests/activity-binding.test.ts` checks on-disk restoration, isolation from Core event writes, and execution-time provider checks without starting Antigravity. [ADR 0002](docs/adr/0002-plugin-owned-native-history.md) records ownership and display boundaries.
+
+Deploy the built package without its development `node_modules`, beneath the profile’s normal peer-resolution hierarchy. A worktree link with its own `dsh-llm` copy shadows the Host SDK and breaks request-marker identity. Run `node scripts/check-sdk-identity.mjs <host-directory> <profile-directory>` against the actual installed profile before treating the guard as active. Never patch SDK markers or Core module resolution.
 
 ## Account quota decision
 

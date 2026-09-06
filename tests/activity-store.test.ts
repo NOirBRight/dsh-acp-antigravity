@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { isRecord } from '../src/decode.js'
 import {
   ACTIVITY_SCHEMA_VERSION,
   AntigravityActivityStore,
@@ -26,8 +27,15 @@ const updateEvent: AntigravityToolEvent = {
   data: { toolId: 'tool-1', status: 'completed', output: 'ok' },
 }
 
+const roots: string[] = []
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
 function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'antigravity-activity-'))
+  const sandbox = mkdtempSync(join(tmpdir(), 'antigravity-activity-'))
+  roots.push(sandbox)
+  const root = join(sandbox, 'history')
+  mkdirSync(root)
+  return root
 }
 
 function onlyFile(root: string): string {
@@ -114,6 +122,21 @@ describe('AntigravityActivityStore', () => {
       expect(() => new AntigravityActivityStore(root).append(sessionId, [readyEvent])).toThrow(/corrupt/)
       expect(readFileSync(path, 'utf8')).toBe(tampered)
     }
+  })
+
+  it('rejects stored records missing v on read and append without overwriting', () => {
+    const root = tempRoot()
+    new AntigravityActivityStore(root).append('s', [readyEvent])
+    const path = onlyFile(root)
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isRecord(parsed)) throw new Error('activity fixture is not an object')
+    delete parsed.v
+    const stripped = JSON.stringify(parsed) + String.fromCharCode(10)
+    writeFileSync(path, stripped)
+    const store = new AntigravityActivityStore(root)
+    expect(() => store.read('s')).toThrow(/corrupt/)
+    expect(() => store.append('s', [readyEvent])).toThrow(/corrupt/)
+    expect(readFileSync(path, 'utf8')).toBe(stripped)
   })
 
   it('rejects symlinks without touching their targets', () => {

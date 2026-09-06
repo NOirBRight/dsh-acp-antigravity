@@ -2,6 +2,12 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
+  ACTIVITY_BINDING_ENDPOINT,
+  ACTIVITY_ENDPOINT,
+  decodeActivitySessionId,
+  type AntigravityActivityHistory,
+} from './activity-contract.js'
+import {
   ACP_SETTINGS_RPC_CHANNEL,
   PICK_ENDPOINT,
   QUOTA_ENDPOINT,
@@ -14,6 +20,7 @@ import {
   type AcpSettingsSnapshot,
   type AntigravityQuotaSnapshot,
 } from './client-contract.js'
+import { ANTIGRAVITY_SESSION_READY } from './tool-events.js'
 
 type RpcResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details?: object } }
 
@@ -25,11 +32,17 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function activityError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith('Antigravity activity history') ? message : 'Antigravity activity history is unavailable'
+}
+
 /** Live Settings operations owned by the host plugin. */
 export interface AcpSettingsRpcDeps {
   snapshot(): Promise<AcpSettingsSnapshot>
   catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string }[] }[] }>
   quota(): Promise<AntigravityQuotaSnapshot>
+  readActivity(sessionId: string): AntigravityActivityHistory
   applyConfig(config: AcpAntigravitySettingsConfig): Promise<void>
   run(action: string, value?: unknown, signal?: AbortSignal): Promise<unknown>
 }
@@ -44,6 +57,20 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
         return { ok: true, value: await deps.quota() }
       } catch (error) {
         return fail(errorText(error))
+      }
+    }
+    if (endpoint === ACTIVITY_ENDPOINT || endpoint === ACTIVITY_BINDING_ENDPOINT) {
+      const sessionId = decodeActivitySessionId(payload)
+      if (sessionId === undefined) return fail('invalid Antigravity activity request')
+      try {
+        const history = await deps.readActivity(sessionId)
+        if (endpoint === ACTIVITY_BINDING_ENDPOINT) {
+          const bound = history.records.some(record => record.type === ANTIGRAVITY_SESSION_READY)
+          return { ok: true, value: { provider: bound ? 'antigravity' : null } }
+        }
+        return { ok: true, value: history }
+      } catch (error) {
+        return fail(activityError(error))
       }
     }
     if (endpoint === SAVE_ENDPOINT) {
