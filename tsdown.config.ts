@@ -12,6 +12,7 @@ const client: UserConfig = {
   dts: false,
   clean: false,
   deps: {
+    alwaysBundle: ['dsh-llm-providers-ui/provider-ui', 'dsh-llm-providers-ui/usage-readers'],
     neverBundle: [
       'react',
       'react/jsx-runtime',

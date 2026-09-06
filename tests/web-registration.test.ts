@@ -5,6 +5,8 @@ function registrationBench() {
   const entries: Array<{ spec: Record<string, unknown>; component: unknown }> = []
   const definitions: unknown[] = []
   const registerProvider = vi.fn(() => vi.fn())
+  const invalidateUsage = vi.fn()
+  const rpcCall = vi.fn()
   const effect = (register: () => unknown) => register()
   const ctx = {
     locale: { register: vi.fn(() => vi.fn()), bind: vi.fn(() => (key: string) => key) },
@@ -14,13 +16,14 @@ function registrationBench() {
       entries: () => [] as { options: { id?: string } }[],
       subscribe: () => () => undefined,
     },
-    connection: { rpc: { call: vi.fn() } },
+    connection: { rpc: { call: rpcCall } },
+    get: () => ({ invalidateUsage }),
     uiConversation: { events: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } } },
     inject: (_dependencies: string[], callback: (scope: object) => unknown) => callback({ providerDirectory: { register: registerProvider }, effect }),
     effect,
   }
   apply(ctx as never)
-  return { entries, definitions, registerProvider }
+  return { entries, definitions, registerProvider, invalidateUsage, rpcCall }
 }
 
 describe('client plugin composition', () => {
@@ -55,7 +58,19 @@ describe('client plugin composition', () => {
 
   it('publishes the Antigravity card as an Agent provider', () => {
     const { registerProvider } = registrationBench()
-    expect(registerProvider).toHaveBeenCalledWith({ key: 'antigravity', role: 'agent' })
+    expect(registerProvider).toHaveBeenCalledWith(expect.objectContaining({ key: 'antigravity', role: 'agent', header: 'shared', usage: expect.objectContaining({ read: expect.any(Function) }) }))
+  })
+
+  it('purges cached sidebar quota on logout and on a structured account-change response', async () => {
+    const { entries, invalidateUsage, rpcCall } = registrationBench()
+    const face = (entries[1]!.spec.inject as () => { run: (action: string) => Promise<unknown>; quota: () => Promise<unknown> })()
+    rpcCall.mockResolvedValueOnce({ ok: true, value: {} })
+    await face.run('sign-out')
+    expect(invalidateUsage).toHaveBeenCalledWith('antigravity')
+    invalidateUsage.mockClear()
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { status: 'account-changed', observedAt: '2026-09-06T03:00:00Z', groups: [] } })
+    await face.quota()
+    expect(invalidateUsage).toHaveBeenCalledWith('antigravity')
   })
 
   it('declares the required browser services', () => {

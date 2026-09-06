@@ -67,3 +67,11 @@ installAntigravityProvider() remains the library mount for hosts that own their 
 ## Real-binary smoke
 
 Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm exec vitest run tests/real-binary.test.ts`. The initialize-only smoke validates the user-provided executable pair without authentication or a model request. Also set `ANTIGRAVITY_AUTHENTICATED_STATE_DIRECTORY` and `ANTIGRAVITY_AUTHENTICATED_INSTANCE_ID` to run the opt-in read-only turn, cancellation, and resume smoke against that isolated authenticated profile. Each smoke skips when its inputs are absent and neither runs in ordinary unit gates.
+
+## Provider settings integration
+
+The browser card uses `dsh-llm-providers-ui/provider-ui` for its monochrome Agent header and segmented account-quota meters. ACP still owns authentication and model capabilities; the card preserves executable, harness, enablement and default-model controls. Live status refreshes preserve unsaved configuration edits. Logout, account change and entitlement loss clear the displayed quota; transport errors retain a visibly stale last-successful snapshot.
+
+`pnpm run typecheck` checks both Host and browser faces (`tsconfig.web.json`). `tests/settings-ui.test.ts` covers draft preservation and usage-directory mapping. `tests/live-quota.test.ts` is an opt-in read-only Google quota smoke using an existing isolated ACP profile.
+
+This integration branch stages the shared UI with `file:../dsh-providers-settings-a`; replace that development dependency with the released shared package before publishing. Deployment and visual verification target the existing 3082 lab only, not production 3080.

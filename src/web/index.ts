@@ -3,11 +3,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {} from 'dsh-llm-providers-ui/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import {
   ACP_SETTINGS_RPC_CHANNEL,
   PICK_ENDPOINT,
+  QUOTA_ENDPOINT,
+  decodeQuotaSnapshot,
   RUN_ENDPOINT,
   SAVE_ENDPOINT,
   SNAPSHOT_ENDPOINT,
@@ -17,10 +22,10 @@ import {
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { AntigravityToolNode, antigravityToolDefinition } from './AntigravityToolNode.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
+import { createAntigravityUsageReader } from './usage-reader.ts'
 
 type ClientContext = Omit<Context, 'connection'> & {
   readonly connection: ConnectionHandle
-  readonly uiConversation: { events: { register(definition: unknown): () => void } }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -34,8 +39,8 @@ export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 
 function installProviderDirectory(ctx: ClientContext): void {
   ctx.inject(['providerDirectory'], scope => {
-    const directory = scope.providerDirectory as { register(entry: { key: string; role: 'agent' }): () => void }
-    scope.effect(() => directory.register({ key: 'antigravity', role: 'agent' }), 'dsh-acp-antigravity: provider directory registration')
+    const directory = scope.providerDirectory
+    scope.effect(() => directory.register({ key: 'antigravity', role: 'agent', header: 'shared', usage: createAntigravityUsageReader() }), 'dsh-acp-antigravity: provider directory registration')
   })
 }
 
@@ -50,11 +55,20 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'dsh-acp-antigravity: Settings page copy')
   const t = ctx.locale.bind(localeNamespace) as AcpSettingsFace['t']
   const { rpc } = ctx.connection
+  const invalidateUsage = (): void => { ctx.get('providerDirectory')?.invalidateUsage('antigravity') }
   const load: AcpSettingsFace['load'] = async () => {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
     const decoded = decodeSnapshot(result.value)
     if (decoded === undefined) throw new Error(t('failed'))
+    return decoded
+  }
+  const quota: AcpSettingsFace['quota'] = async signal => {
+    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, QUOTA_ENDPOINT, {}, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    const decoded = decodeQuotaSnapshot(result.value)
+    if (decoded === undefined) throw new Error(t('quotaUnavailable'))
+    if (decoded.status === 'account-changed' || decoded.status === 'authentication-required' || decoded.status === 'not-entitled') invalidateUsage()
     return decoded
   }
   const save: AcpSettingsFace['save'] = async (row: AcpSettingsRow) => {
@@ -71,6 +85,7 @@ export function apply(ctx: ClientContext): void {
   const run: AcpSettingsFace['run'] = async (action, value) => {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, RUN_ENDPOINT, { action, ...(value === undefined ? {} : { value }) }, undefined)
     if (!result.ok) throw new Error(result.error.message)
+    if (action === 'sign-out' || action === 'sign-in') invalidateUsage()
     return result.value
   }
   const pick: AcpSettingsFace['pick'] = async () => {
@@ -83,7 +98,7 @@ export function apply(ctx: ClientContext): void {
     name: 'settings.provider.item',
     key: 'antigravity',
     locale: localeNamespace,
-    inject: (): AcpSettingsFace => ({ t, load, save, run, pick }),
+    inject: (): AcpSettingsFace => ({ t, load, save, run, pick, quota }),
   }, ExternalAgentsSection))
   ctx.effect(() => {
     let warned = false
