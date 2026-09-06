@@ -51,6 +51,7 @@ export class AntigravitySession implements ExternalAgentSession {
     let textBytes = 0
     let protocolFailure: Error | undefined
     let providerFailure: string | undefined
+    let publishFailure: Error | undefined
     let events = Promise.resolve()
     const maxTextBytes = this.config.maxEventTextBytes ?? 1024 * 1024
     const bounds: ExternalAgentEventBounds = { maxTextBytes, maxPayloadBytes: this.config.maxEventPayloadBytes ?? 16 * 1024 * 1024 }
@@ -69,7 +70,14 @@ export class AntigravitySession implements ExternalAgentSession {
           textBytes += utf8Length(delta)
         }
         if (event.type === 'turn-result' && event.status === 'failed') providerFailure = event.content ?? 'Antigravity turn failed'
-        events = events.then(() => boundedHost.publish(event))
+        events = events.then(() => boundedHost.publish(event)).then(undefined, (error: unknown) => {
+          // Abort-driven late publishes are expected teardown noise once the
+          // turn settles; anything else stays a loud turn failure below.
+          // The sink also keeps every chain observed on the abort path, where
+          // runTurn returns before the success-path drain.
+          if (isTurnAbortedError(error)) return
+          publishFailure ??= error instanceof Error ? error : new Error('Antigravity host publish failed')
+        })
       } catch (protocolError) {
         protocolFailure = new Error('Antigravity emitted a malformed session update', { cause: protocolError })
         try { this.connection.notify('session/cancel', { sessionId: this.nativeId }) } catch { /* The transport is already closing. */ }
@@ -84,6 +92,7 @@ export class AntigravitySession implements ExternalAgentSession {
       await this.connection.request('session/set_mode', { sessionId: this.nativeId, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
       const response = await this.connection.request('session/prompt', { sessionId: this.nativeId, prompt }, request.signal)
       await events
+      if (publishFailure !== undefined) throw publishFailure
       if (protocolFailure !== undefined) throw protocolFailure
       await publishUsage(response, boundedHost)
       const stopReason = isRecord(response) ? response.stopReason : undefined
@@ -147,3 +156,6 @@ async function publishUsage(response: unknown, host: ExternalAgentTurnHost): Pro
 }
 
 function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === 'AbortError' }
+
+/** Whether a publish rejection is the managed host refusing a settled turn. */
+function isTurnAbortedError(error: unknown): boolean { return error instanceof Error && error.name === 'TurnAbortedError' }
