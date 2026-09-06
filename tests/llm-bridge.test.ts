@@ -87,4 +87,85 @@ describe('Antigravity LLM bridge', () => {
     expect(prepared.model).toEqual({ provider: 'antigravity', id: 'gemini-3.8-flash', name: 'gemini-3.8-flash' })
     expect(typeof prepared.stream).toBe('function')
   })
+
+  it('disposes the fresh session and rejects when ready persistence fails once', async () => {
+    let opens = 0
+    let runTurns = 0
+    let disposes = 0
+    let readyCalls = 0
+    const adapter = createAntigravityLlmBridge(() => ({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      openSession: async () => {
+        opens += 1
+        return {
+          ref: {},
+          supportedModes: [],
+          runTurn: async () => { runTurns += 1; return { status: 'completed', text: 'ok' } },
+          dispose: async () => { disposes += 1 },
+        }
+      },
+    }) as never, undefined, undefined, {
+      appendSessionReady: () => {
+        readyCalls += 1
+        if (readyCalls === 1) throw new Error('ready persistence failed')
+      },
+    })
+    const options = { provider: 'antigravity', model: 'gemini', sessionId: 'ready-retry', messages: [{ role: 'user', source: { kind: 'user' }, content: 'ping' }] }
+    await expect((async () => {
+      for await (const chunk of adapter.stream(options)) void chunk
+    })()).rejects.toThrow('ready persistence failed')
+    expect(runTurns).toBe(0)
+    expect(disposes).toBe(1)
+    const chunks: { type: string; text?: string }[] = []
+    for await (const chunk of adapter.stream(options)) chunks.push(chunk as { type: string; text?: string })
+    expect(readyCalls).toBe(2)
+    expect(opens).toBe(2)
+    expect(runTurns).toBe(1)
+    expect(disposes).toBe(1)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: 'stop' })
+    expect(chunks.some(chunk => (chunk.text ?? '').includes('ready persistence failed'))).toBe(false)
+  })
+
+  it('rejects without a successful finish when tool persistence fails', async () => {
+    const adapter = createAntigravityLlmBridge(() => ({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      openSession: async () => ({
+        ref: {},
+        supportedModes: [],
+        runTurn: async (_request: unknown, host: { publish: (event: Record<string, unknown>) => Promise<void> }) => {
+          await host.publish({ type: 'assistant-delta', text: 'partial' })
+          await host.publish({ type: 'tool-activity', toolId: 'tool-1', name: 'Read', status: 'completed', output: '{"combinedOutput":"ok"}' })
+          return { status: 'completed', text: 'partial' }
+        },
+        dispose: async () => undefined,
+      }),
+    }) as never, undefined, undefined, {
+      appendToolEvents: () => { throw new Error('tool persistence failed') },
+    })
+    const chunks: { type: string; reason?: string }[] = []
+    await expect((async () => {
+      for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'tool-failure', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }] })) {
+        chunks.push(chunk as { type: string; reason?: string })
+      }
+    })()).rejects.toThrow('tool persistence failed')
+    expect(chunks.some(chunk => chunk.type === 'finish')).toBe(false)
+  })
+
+  it('rejects startup open failures without caching the session', async () => {
+    let opens = 0
+    const adapter = createAntigravityLlmBridge(() => ({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      openSession: async () => { opens += 1; throw new Error('native exploded') },
+    }) as never)
+    const options = { provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', source: { kind: 'user' }, content: 'ping' }] }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect((async () => {
+        for await (const chunk of adapter.stream(options)) void chunk
+      })()).rejects.toThrow('native exploded')
+    }
+    expect(opens).toBe(2)
+  })
 })

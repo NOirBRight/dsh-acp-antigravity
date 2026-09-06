@@ -32,7 +32,10 @@ it('stores native activity independently without appending any Core session even
     const restored = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history')).read('session-native')
     expect(restored.records.map(record => record.type)).toEqual(['antigravity/session-ready', 'antigravity/tool-start'])
     expect(() => sink.appendSessionReady!(undefined)).toThrow(/session/i)
+    vi.spyOn(AntigravityActivityStore.prototype, 'append').mockImplementationOnce(() => { throw new Error('EACCES /private/path') })
+    expect(() => sink.appendSessionReady!('failed-storage')).toThrow(/^Unable to persist Antigravity activity; native execution stopped[.]$/)
   } finally {
+    vi.restoreAllMocks()
     vi.unstubAllEnvs()
     rmSync(home, { recursive: true, force: true })
   }

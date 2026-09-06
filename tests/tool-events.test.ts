@@ -114,7 +114,7 @@ describe('ACP tool activity durable event family', () => {
     ])
   })
 
-  it('does not append readiness when native session startup fails', async () => {
+  it('rejects with the startup error instead of appending readiness', async () => {
     let sessionReady = 0
     const adapter = createAntigravityLlmBridge(() => ({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
@@ -125,9 +125,11 @@ describe('ACP tool activity durable event family', () => {
       appendSessionReady: () => { sessionReady += 1 },
     })
 
-    let chunks = 0
-    for await (const _chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [] })) chunks += 1
-    expect(chunks).toBeGreaterThan(0)
+    const chunks: unknown[] = []
+    await expect((async () => {
+      for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [] })) chunks.push(chunk)
+    })()).rejects.toThrow('startup failed')
+    expect(chunks).toEqual([])
     expect(sessionReady).toBe(0)
   })
 })

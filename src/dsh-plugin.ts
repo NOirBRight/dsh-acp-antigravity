@@ -78,7 +78,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   installActivityBindingGuard(ctx, activity)
   const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
     if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
-    activity.append(sessionId, events)
+    try {
+      activity.append(sessionId, events)
+    } catch {
+      throw new Error('Unable to persist Antigravity activity; native execution stopped.')
+    }
   }
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined

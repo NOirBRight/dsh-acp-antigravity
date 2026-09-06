@@ -175,128 +175,129 @@ export function createAntigravityLlmBridge(
       }
     },
     stream: async function* (options) {
-      try {
-        const installed = getProvider()
-        if (installed === undefined) throw new Error('Antigravity is not configured')
-        const key = options.sessionId ?? 'anonymous-' + String(++anonymousSessions)
-        const permissionMode = permissionModeFromMessages(options.messages)
-        const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
-        const natives = await nativeModels()
-        const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
-        const workspaceRoot = workspaceRootFromMessages(options.messages)
-        let session = sessions.get(key)
-        if (session === undefined) {
-          session = await installed.openSession({
-            route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
-            session: sessionId(key),
-            permissionMode: openMode,
-            ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-            ...(options.signal === undefined ? {} : { signal: options.signal }),
-          })
-          sessions.set(key, session)
-          hostAsk?.appendSessionReady?.(options.sessionId)
-        }
-        const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
-        if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
-        const pending: { kind: 'thought' | 'text'; text: string }[] = []
-        let sawPlan = false
-        let wake: (() => void) | undefined
-        const push = (kind: 'thought' | 'text', text: string): void => {
-          if (text.length === 0) return
-          pending.push({ kind, text })
-          wake?.()
-        }
-        const turnHost = createExternalAgentTurnHost(options.signal ?? new AbortController().signal, {
-          publish: event => {
-            if (event.type === 'thought-delta') push('thought', event.text)
-            else if (event.type === 'assistant-delta') push('text', event.text)
-            else if (event.type === 'tool-activity') {
-              const seen = emittedToolIds.get(key) ?? new Set<string>()
-              emittedToolIds.set(key, seen)
-              const events = toDurableToolEvents(event, seen, workspaceRoot)
-              if (!seen.has(event.toolId)) seen.add(event.toolId)
-              hostAsk?.appendToolEvents?.(options.sessionId, events)
-            }
-            else if (event.type === 'plan-update') {
-              sawPlan = true
-              push('text', formatPlanUpdate(event))
-            }
-          },
-          requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal, options.sessionId),
-          requestUserInput: request => decideUserInput(request, hostAsk, options.signal, options.sessionId),
+      const installed = getProvider()
+      if (installed === undefined) throw new Error('Antigravity is not configured')
+      const key = options.sessionId ?? 'anonymous-' + String(++anonymousSessions)
+      const permissionMode = permissionModeFromMessages(options.messages)
+      const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
+      const natives = await nativeModels()
+      const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
+      const workspaceRoot = workspaceRootFromMessages(options.messages)
+      let session = sessions.get(key)
+      if (session === undefined) {
+        const opened = await installed.openSession({
+          route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
+          session: sessionId(key),
+          permissionMode: openMode,
+          ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
         })
-        async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
-          let { thought, text, thoughtOpen, textOpen } = start
-          while (true) {
-            if (pending.length === 0) {
-              const settled = await Promise.race([running.then(() => 'done' as const), new Promise<'more'>(resolve => { wake = () => resolve('more') })])
-              if (settled === 'done' && pending.length === 0) break
-            }
-            const item = pending.shift()
-            if (item === undefined) break
-            if (item.kind === 'thought') {
-              if (!thoughtOpen) {
-                yield { type: 'block-start', index: 0, blockType: 'reasoning' }
-                thoughtOpen = true
-              }
-              thought += item.text
-              yield { type: 'reasoning-delta', index: 0, text: item.text }
-            } else {
-              if (!textOpen) {
-                yield { type: 'block-start', index: 1, blockType: 'text' }
-                textOpen = true
-              }
-              text += item.text
-              yield { type: 'text-delta', index: 1, text: item.text }
-            }
-          }
-          await running
-          return { thought, text, thoughtOpen, textOpen }
-        }
-        const prompt = acpPrompt(options.messages)
-        const first = session.runTurn({
-          turn: turnId('t' + String(++turns)),
-          prompt,
-          permissionMode,
-          signal: options.signal ?? new AbortController().signal,
-        }, turnHost)
-        let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
-        const result = await first
-        let assembled = state.text.length > 0 ? state.text : result.text
-        if (inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
-          let approved = false
+        try {
+          hostAsk?.appendSessionReady?.(options.sessionId)
+        } catch (error) {
           try {
-            approved = await reviewPlan(assembled, hostAsk, options.signal, options.sessionId)
+            await opened.dispose()
           } catch {
-            approved = false
+            // Preserve storage failure if cleanup also fails.
           }
-          if (approved) {
-            const second = session.runTurn({
-              turn: turnId('t' + String(++turns)),
-              prompt: 'The user approved the plan. Carry it out now.',
-              permissionMode,
-              signal: options.signal ?? new AbortController().signal,
-            }, turnHost)
-            state = yield* drain(second, state)
-            const next = await second
-            assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
-          }
+          throw error
         }
-        if (state.thoughtOpen) yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: state.thought } }
-        if (state.textOpen || assembled.length > 0) {
-          if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
-          yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
-        }
-        yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(assembled) } }
-        yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        yield { type: 'block-start', index: 0, blockType: 'text' }
-        yield { type: 'text-delta', index: 0, text: message }
-        yield { type: 'block-end', index: 0, block: { type: 'text', text: message } }
-        yield { type: 'usage', usage: { inputTokens: 1, outputTokens: estimateTokens(message) } }
-        yield { type: 'finish', reason: 'stop' }
+        session = opened
+        sessions.set(key, session)
       }
+      const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
+      if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
+      const pending: { kind: 'thought' | 'text'; text: string }[] = []
+      let sawPlan = false
+      let wake: (() => void) | undefined
+      const push = (kind: 'thought' | 'text', text: string): void => {
+        if (text.length === 0) return
+        pending.push({ kind, text })
+        wake?.()
+      }
+      const turnHost = createExternalAgentTurnHost(options.signal ?? new AbortController().signal, {
+        publish: event => {
+          if (event.type === 'thought-delta') push('thought', event.text)
+          else if (event.type === 'assistant-delta') push('text', event.text)
+          else if (event.type === 'tool-activity') {
+            const seen = emittedToolIds.get(key) ?? new Set<string>()
+            emittedToolIds.set(key, seen)
+            const events = toDurableToolEvents(event, seen, workspaceRoot)
+            if (!seen.has(event.toolId)) seen.add(event.toolId)
+            hostAsk?.appendToolEvents?.(options.sessionId, events)
+          }
+          else if (event.type === 'plan-update') {
+            sawPlan = true
+            push('text', formatPlanUpdate(event))
+          }
+        },
+        requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal, options.sessionId),
+        requestUserInput: request => decideUserInput(request, hostAsk, options.signal, options.sessionId),
+      })
+      async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
+        let { thought, text, thoughtOpen, textOpen } = start
+        while (true) {
+          if (pending.length === 0) {
+            const settled = await Promise.race([running.then(() => 'done' as const), new Promise<'more'>(resolve => { wake = () => resolve('more') })])
+            if (settled === 'done' && pending.length === 0) break
+          }
+          const item = pending.shift()
+          if (item === undefined) break
+          if (item.kind === 'thought') {
+            if (!thoughtOpen) {
+              yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+              thoughtOpen = true
+            }
+            thought += item.text
+            yield { type: 'reasoning-delta', index: 0, text: item.text }
+          } else {
+            if (!textOpen) {
+              yield { type: 'block-start', index: 1, blockType: 'text' }
+              textOpen = true
+            }
+            text += item.text
+            yield { type: 'text-delta', index: 1, text: item.text }
+          }
+        }
+        await running
+        return { thought, text, thoughtOpen, textOpen }
+      }
+      const prompt = acpPrompt(options.messages)
+      const first = session.runTurn({
+        turn: turnId('t' + String(++turns)),
+        prompt,
+        permissionMode,
+        signal: options.signal ?? new AbortController().signal,
+      }, turnHost)
+      let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
+      const result = await first
+      let assembled = state.text.length > 0 ? state.text : result.text
+      if (inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
+        let approved = false
+        try {
+          approved = await reviewPlan(assembled, hostAsk, options.signal, options.sessionId)
+        } catch {
+          approved = false
+        }
+        if (approved) {
+          const second = session.runTurn({
+            turn: turnId('t' + String(++turns)),
+            prompt: 'The user approved the plan. Carry it out now.',
+            permissionMode,
+            signal: options.signal ?? new AbortController().signal,
+          }, turnHost)
+          state = yield* drain(second, state)
+          const next = await second
+          assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
+        }
+      }
+      if (state.thoughtOpen) yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: state.thought } }
+      if (state.textOpen || assembled.length > 0) {
+        if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
+        yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
+      }
+      yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(assembled) } }
+      yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
     },
   }
 }
