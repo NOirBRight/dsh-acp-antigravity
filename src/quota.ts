@@ -146,7 +146,6 @@ export class AntigravityQuotaReader {
   }
 
   private async refresh(signal?: AbortSignal): Promise<AntigravityQuotaSnapshot> {
-    const startedGeneration = this.generation
     const observedAt = new Date(this.now()).toISOString()
     const loaded = await this.loadCredentials()
     this.syncKey(loaded.key)
@@ -156,6 +155,7 @@ export class AntigravityQuotaReader {
     }
     const startedKey = loaded.key
     if (startedKey === null) return { status: 'authentication-required', groups: [], observedAt, message: antigravitySignInRequiredMessage() }
+    const startedGeneration = this.generation
     const cached = this.cachedQuota
     if (cached !== undefined && cached.key === startedKey && this.now() - cached.fetchedAt < this.cacheTtlMs) return cached.snapshot
     const result = await this.fetchFresh(loaded.credentials, startedKey, observedAt, signal)

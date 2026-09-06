@@ -237,6 +237,10 @@ describe('Antigravity quota reader', () => {
     const tokenCalls = calls.filter(call => call.url === ANTIGRAVITY_OAUTH_TOKEN_URL)
     expect(tokenCalls).toHaveLength(2)
     expect(tokenCalls[1]?.body).toContain('refresh_token=rt-new')
+    await writeFile(tokenPath, JSON.stringify(tokenBody))
+    const third = await reader.snapshot()
+    expect(third.status).toBe('ready')
+    expect(calls.filter(call => call.url === ANTIGRAVITY_OAUTH_TOKEN_URL)).toHaveLength(3)
   })
 
   it('rejects symlinked credential files and untrusted token endpoints', async () => {
