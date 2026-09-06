@@ -166,7 +166,7 @@ export class AntigravityQuotaReader {
         const failure = end.failure ?? { status: 'authentication-required' as const, message: antigravitySignInRequiredMessage() }
         return { status: failure.status, groups: [], observedAt, message: failure.message }
       }
-      return { status: 'error', groups: [], observedAt, message: 'Antigravity account changed during quota refresh.' }
+      return { status: 'account-changed', groups: [], observedAt, message: 'Antigravity account changed during quota refresh.' }
     }
     if (result.status === 'ready') this.cachedQuota = { snapshot: result, fetchedAt: this.now(), key: startedKey }
     return result

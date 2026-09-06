@@ -229,7 +229,7 @@ describe('Antigravity quota reader', () => {
     await writeFile(tokenPath, JSON.stringify({ ...tokenBody, refresh_token: 'rt-new' }))
     releaseQuota(jsonResponse(quotaBody))
     const first = await stale
-    expect(first.status).toBe('error')
+    expect(first.status).toBe('account-changed')
     expect(first.message).toContain('account changed')
     expect(first.groups).toEqual([])
     const second = await reader.snapshot()
@@ -241,6 +241,28 @@ describe('Antigravity quota reader', () => {
     const third = await reader.snapshot()
     expect(third.status).toBe('ready')
     expect(calls.filter(call => call.url === ANTIGRAVITY_OAUTH_TOKEN_URL)).toHaveLength(3)
+  })
+
+  it('reports authentication-required when the profile vanishes mid-flight', async () => {
+    const { config, tokenPath } = await setupProfile()
+    const calls: CapturedRequest[] = []
+    let releaseQuota!: (value: Response) => void
+    const gate = new Promise<Response>(resolve => { releaseQuota = resolve })
+    const reader = createAntigravityQuotaReader(config, {
+      fetchFn: mockFetch(url => {
+        if (url === ANTIGRAVITY_OAUTH_TOKEN_URL) return jsonResponse({ access_token: 'at-old', expires_in: 3600 })
+        if (url.endsWith(':loadCodeAssist')) return jsonResponse(discoveryBody)
+        return gate.then(() => jsonResponse(quotaBody))
+      }, calls),
+      now: () => frozenNow,
+    })
+    const stale = reader.snapshot()
+    while (!calls.some(call => call.url.includes(':retrieveUserQuotaSummary'))) await new Promise(resolve => setTimeout(resolve, 5))
+    await rm(tokenPath)
+    releaseQuota(jsonResponse(quotaBody))
+    const result = await stale
+    expect(result.groups).toEqual([])
+    expect(result.status).toBe('authentication-required')
   })
 
   it('rejects symlinked credential files and untrusted token endpoints', async () => {
@@ -300,6 +322,7 @@ describe('quota RPC contract', () => {
     expect(decoded).toEqual(snapshot)
     expect(decodeQuotaSnapshot({ status: 'ready' })).toBeUndefined()
     expect(decodeQuotaSnapshot({ status: 'platinum', groups: [], observedAt: snapshot.observedAt })).toBeUndefined()
+    expect(decodeQuotaSnapshot({ status: 'account-changed', groups: [], observedAt: snapshot.observedAt })).toEqual({ status: 'account-changed', groups: [], observedAt: snapshot.observedAt })
     expect(decodeQuotaSnapshot({ status: 'ready', groups: [{ buckets: [{ remainingFraction: Number.NaN }] }], observedAt: snapshot.observedAt })?.groups[0]?.buckets[0]).toEqual({})
   })
 

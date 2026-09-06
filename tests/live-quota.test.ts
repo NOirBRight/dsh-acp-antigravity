@@ -111,11 +111,12 @@ describe.skipIf(!configured)('live Antigravity quota smoke', () => {
         if (Date.now() > deadline) throw new Error('live quota request was not observed')
         await new Promise(resolve => setTimeout(resolve, 10))
       }
-      await writeFile(raceTokenPath, 'not-json{')
+      const parsed = JSON.parse(original.toString('utf8')) as Record<string, unknown>
+      await writeFile(raceTokenPath, JSON.stringify({ ...parsed, refresh_token: 'rt-decoy-unusable' }))
       release()
       const mismatch = await stale
       expect(mismatch.groups).toEqual([])
-      expect(mismatch.status).not.toBe('ready')
+      expect(mismatch.status).toBe('account-changed')
       await writeFile(raceTokenPath, original, { mode: 0o600 })
       const recovered = await reader.snapshot()
       console.log('live recovery: ' + JSON.stringify(sanitizeForReport(recovered)) + ' message=' + (recovered.message ?? 'none'))

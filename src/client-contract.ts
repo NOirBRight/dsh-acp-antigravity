@@ -135,8 +135,10 @@ export interface AntigravityQuotaGroup {
   readonly buckets: readonly AntigravityQuotaBucket[]
 }
 
-/** Readiness of a quota snapshot. Failures are explicit; grouping is never estimated. */
-export type AntigravityQuotaStatus = 'ready' | 'authentication-required' | 'not-entitled' | 'error'
+/** Readiness of a quota snapshot. Failures are explicit; grouping is never estimated.
+ * account-changed means the profile account switched mid-refresh: the snapshot
+ * carries no groups and any retained tile must be discarded, then polled again. */
+export type AntigravityQuotaStatus = 'ready' | 'authentication-required' | 'not-entitled' | 'account-changed' | 'error'
 
 /** Sanitized account quota for the Settings UI. Never carries credentials, project ids, or raw auth payloads. */
 export interface AntigravityQuotaSnapshot {
@@ -178,7 +180,7 @@ function decodeQuotaBucket(value: unknown): AntigravityQuotaBucket | undefined {
 export function decodeQuotaSnapshot(value: unknown): AntigravityQuotaSnapshot | undefined {
   if (!isRecord(value)) return undefined
   const status = value.status
-  if (status !== 'ready' && status !== 'authentication-required' && status !== 'not-entitled' && status !== 'error') return undefined
+  if (status !== 'ready' && status !== 'authentication-required' && status !== 'not-entitled' && status !== 'account-changed' && status !== 'error') return undefined
   if (typeof value.observedAt !== 'string' || !Array.isArray(value.groups)) return undefined
   const groups: AntigravityQuotaGroup[] = []
   for (const group of value.groups) {
