@@ -5,6 +5,8 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from 'dsh-llm-providers-ui/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import {
   ACP_SETTINGS_RPC_CHANNEL,
@@ -17,12 +19,17 @@ import {
   decodeSnapshot,
   type AcpSettingsRow,
 } from '../client-contract.ts'
+import { NativeTurnContainer } from './NativeTurnContainer.tsx'
+import { nativeTurnDefinition } from './native-turn.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
+import { shouldClearQuota } from './settings-state.ts'
+import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
 
 type ClientContext = Omit<Context, 'connection'> & {
   readonly connection: ConnectionHandle
+  readonly uiConversation: UiConversation
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -32,7 +39,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'dsh-acp-antigravity-client'
-export const inject = ['slots', 'locale', 'connection']
+export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 
 function installProviderDirectory(ctx: ClientContext): void {
   ctx.inject(['providerDirectory'], scope => {
@@ -47,12 +54,15 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'dsh-acp-antigravity: Settings page copy')
   const t = ctx.locale.bind(localeNamespace) as AcpSettingsFace['t']
   const { rpc } = ctx.connection
-  const invalidateUsage = (): void => { ctx.get('providerDirectory')?.invalidateUsage('antigravity') }
+  const invalidateUsage = (): void => { dropPersistedUsageKeys(['antigravity']); ctx.get('providerDirectory')?.invalidateUsage('antigravity') }
+  let acceptedRow: AcpSettingsRow | undefined
   const load: AcpSettingsFace['load'] = async () => {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
     const decoded = decodeSnapshot(result.value)
     if (decoded === undefined) throw new Error(t('failed'))
+    if (shouldClearQuota(acceptedRow, decoded.rows[0])) invalidateUsage()
+    acceptedRow = decoded.rows[0]
     return decoded
   }
   const quota: AcpSettingsFace['quota'] = async signal => {
@@ -92,6 +102,15 @@ export function apply(ctx: ClientContext): void {
     locale: localeNamespace,
     inject: (): AcpSettingsFace => ({ t, load, save, run, pick, quota }),
   }, ExternalAgentsSection))
+  // Per-turn native container in the Chat transcript: the definition folds
+  // standard turn/start+end only (no Core writes); node bodies share one
+  // session-scoped sidecar subscription and partition by loaded Chat starts.
+  ctx.effect(() => ctx.uiConversation.events.register(nativeTurnDefinition), 'dsh-acp-antigravity: native turn fold')
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node',
+    key: 'antigravity-native',
+    inject: (sessionId: string) => ({ t, rpc, sessionId: sessionId as SessionId, uiConversation: ctx.uiConversation }),
+  }, NativeTurnContainer))
   ctx.effect(() => {
     let warned = false
     const check = (): void => {

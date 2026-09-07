@@ -76,6 +76,10 @@ Native startup is reusable only after its ready record is saved. Failed startup 
 
 Deploy the built package without its development `node_modules`, beneath the profile’s normal peer-resolution hierarchy. A worktree link with its own `dsh-llm` copy shadows the Host SDK and breaks request-marker identity. Run `node scripts/check-sdk-identity.mjs <host-directory> <profile-directory>` against the actual installed profile before treating the guard as active. Never patch SDK markers or Core module resolution.
 
+## Native usage accounting
+
+The LLM bridge forwards only complete provider-reported token counters; missing usage is unavailable, not a character-count estimate or zero. Native tool execution and permission waits occur inside the ACP model turn, so the standard Harness elapsed-time/TPS readout is not an isolated model decoding benchmark. Native subagent launch completion does not establish child-task completion; child lifecycle details require explicit provider events.
+
 ## Account quota decision
 
 [ADR 0003](docs/adr/0003-cli-free-account-quota.md) records the verified CLI-free personal-OAuth quota path and its security requirements. The Host quota reader (`createAntigravityQuotaReader`) supplies the sanitized `quota` RPC endpoint consumed by the settings card and Provider Usage panel.

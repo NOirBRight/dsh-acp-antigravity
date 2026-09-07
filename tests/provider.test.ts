@@ -103,6 +103,11 @@ function host(events: string[] = []): ExternalAgentTurnHost {
 }
 
 describe('Antigravity mapping and safety', () => {
+  it('preserves ACP content when a tool has no raw output', () => {
+    const content = [{ type: 'content', content: { type: 'text', text: 'native result' } }]
+    expect(normalizeAntigravitySessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-content', status: 'completed', content }, { maxTextBytes: 1024, maxPayloadBytes: 4096 })).toMatchObject({ output: JSON.stringify(content) })
+  })
+
   it('maps all public permission modes and advertises client capabilities', () => {
     expect(mapPermissionMode('approval-required')).toBe('default')
     expect(mapPermissionMode('auto-accept-edits')).toBe('auto_edit')
@@ -138,6 +143,21 @@ describe('Antigravity mapping and safety', () => {
     await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'write' }, options: [{ optionId: 'always', kind: 'allow_always', name: 'Always', _meta: { 'agy.security.warning': { message: 'Prompt injection risk' } } }] }, 1)).resolves.toMatchObject({ outcome: { optionId: 'always' } })
     expect(scope).toBe('session')
     expect(warning).toBe('Prompt injection risk')
+  })
+
+  it('describes object toolCall input in the permission reason', async () => {
+    let reason: unknown
+    let toolName: unknown
+    const handler = createAntigravityInteractionHandler({
+      publish: () => undefined,
+      requestPermission: async request => { reason = request.reason; toolName = request.toolName; return { kind: 'allow-once', optionId: request.options[0]!.optionId } },
+      requestUserInput: async () => ({ answers: [] }),
+    })
+    await handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'Read file', kind: 'read', rawInput: { path: '/workspace/src/a.ts' }, locations: [{ path: '/workspace/src/a.ts' }] }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }] }, 1)
+    expect(toolName).toBe('Read file')
+    expect(reason).toBe('Antigravity requested permission: Read file · path: /workspace/src/a.ts')
+    await handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'run_command', rawInput: { command: 'git status' } }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }] }, 2)
+    expect(reason).toBe('Antigravity requested permission: run_command · command: git status')
   })
 
   it('normalizes interaction-prefixed permission IDs as user questions', async () => {

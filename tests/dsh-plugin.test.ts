@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apply, decodeSnapshot, name, inject } from '../src/index.js'
+import { apply, decodeSnapshot, name, inject, requestNativeApproval } from '../src/index.js'
 import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
 
 describe('DSH settings plugin', () => {
@@ -80,5 +80,63 @@ describe('DSH settings plugin', () => {
     const snapshot = decodeSnapshot(result.value)
     expect(snapshot?.rows[0]?.installed).toBe(true)
     expect(snapshot?.rows[0]?.executablePath).toBe(server)
+  })
+
+  it('routes native approval through the exact session agent without a Core call id', async () => {
+    const seen: Record<string, unknown>[] = []
+    const agent = { session: { id: 'session-1' } }
+    const ctx = {
+      get: (service: string): unknown => {
+        if (service === 'agents') return { get: (id: string): unknown => id === 'session-1' ? agent : undefined }
+        if (service === 'approval') return { request: (req: Record<string, unknown>): Promise<string> => { seen.push(req); return Promise.resolve('allowed-once') } }
+        return undefined
+      },
+    }
+    const outcome = await requestNativeApproval(ctx as never, { sessionId: 'session-1', toolName: 'Read', reason: 'read /lab/ws/note.txt' })
+    expect(outcome).toBe('allowed-once')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.agent).toBe(agent)
+    expect(seen[0]).toMatchObject({ toolName: 'Read', reason: 'read /lab/ws/note.txt' })
+    expect(seen[0]).not.toHaveProperty('callId')
+    expect(seen[0]).not.toHaveProperty('sessionId')
+  })
+
+  it('cancels native approval without generic ask when service or session is missing', async () => {
+    let genericAsks = 0
+    const askCtx = {
+      get: (service: string): unknown => {
+        if (service === 'userQuestions') return { ask: (): Promise<never> => { genericAsks += 1; throw new Error('must not ask') } }
+        return undefined
+      },
+    }
+    await expect(requestNativeApproval(askCtx as never, { sessionId: 'session-1', toolName: 'Read' })).resolves.toBe('cancelled')
+    const agent = { session: { id: 'session-1' } }
+    const noServiceCtx = {
+      get: (service: string): unknown => service === 'agents' ? { get: (): unknown => agent } : undefined,
+    }
+    await expect(requestNativeApproval(noServiceCtx as never, { sessionId: 'session-1', toolName: 'Read' })).resolves.toBe('cancelled')
+    const noAgentCtx = {
+      get: (service: string): unknown => {
+        if (service === 'agents') return { get: (): unknown => undefined }
+        if (service === 'approval') return { request: (): Promise<string> => Promise.resolve('allowed-once') }
+        return undefined
+      },
+    }
+    await expect(requestNativeApproval(noAgentCtx as never, { sessionId: 'session-9', toolName: 'Read' })).resolves.toBe('cancelled')
+    expect(genericAsks).toBe(0)
+  })
+
+  it('denies native approval when the service rejects without consulting generic ask', async () => {
+    let genericAsks = 0
+    const ctx = {
+      get: (service: string): unknown => {
+        if (service === 'agents') return { get: (): unknown => ({ session: { id: 'session-1' } }) }
+        if (service === 'approval') return { request: (): Promise<string> => Promise.resolve('rejected') }
+        if (service === 'userQuestions') return { ask: (): Promise<never> => { genericAsks += 1; throw new Error('must not ask') } }
+        return undefined
+      },
+    }
+    await expect(requestNativeApproval(ctx as never, { sessionId: 'session-1', toolName: 'Write' })).resolves.toBe('rejected')
+    expect(genericAsks).toBe(0)
   })
 })

@@ -10,6 +10,14 @@ import {
 } from '../src/tool-events.js'
 
 describe('ACP tool activity durable event family', () => {
+  it('retains native command inputs and structured results for read-only display', () => {
+    const input = JSON.stringify({ CommandLine: 'git status', Cwd: '/workspace' })
+    const output = JSON.stringify({ taskId: 'child-1', status: 'running' })
+    const events = toDurableToolEvents({ toolId: 'spawn-1', name: 'spawn_task', status: 'completed', input, output }, new Set())
+    const state = events.reduce(foldAntigravityToolEvent, undefined)
+    expect(state).toMatchObject({ input, output })
+  })
+
   it('maps one native tool notification to replayable start/update with a stable id', () => {
     const seen = new Set<string>()
     const first = toDurableToolEvents(
@@ -40,7 +48,7 @@ describe('ACP tool activity durable event family', () => {
       toolId: 'tool-late', name: 'read', status: 'completed', output: '{\"workingDir\":\"/workspace/src\"}',
     }, seen)
     expect(completed).toEqual([
-      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-late', status: 'completed', location: { target: '/workspace/src', kind: 'file' } } },
+      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-late', status: 'completed', output: '{"workingDir":"/workspace/src"}', location: { target: '/workspace/src', kind: 'file' } } },
     ])
     expect([...start, ...completed].reduce(foldAntigravityToolEvent, undefined)).toMatchObject({ location: { target: '/workspace/src' } })
   })
@@ -52,13 +60,13 @@ describe('ACP tool activity durable event family', () => {
     expect(events[0]).toMatchObject({ data: { location: { target: '/workspace/src/a.ts', kind: 'file' } } })
   })
 
-  it('normalizes URL targets without retaining native JSON', () => {
+  it('normalizes URL targets and retains native input for disclosure', () => {
     const events = toDurableToolEvents({
       toolId: 'web-1', name: 'open_url', status: 'completed',
       input: '{\"url\":\"https://example.test/report\"}', output: '{\"combinedOutput\":\"opened\"}',
     }, new Set())
     expect(events).toEqual([
-      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'web-1', name: 'open url', status: 'completed', location: { target: 'https://example.test/report', kind: 'url' } } },
+      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'web-1', name: 'open url', input: '{"url":"https://example.test/report"}', status: 'completed', location: { target: 'https://example.test/report', kind: 'url' } } },
       { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'web-1', status: 'completed', output: 'opened' } },
     ])
   })
@@ -109,8 +117,8 @@ describe('ACP tool activity durable event family', () => {
     expect(chunks.some(chunk => chunk.block?.type === 'tool-call')).toBe(false)
     expect(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')).toBe('done')
     expect(appended).toEqual([
-      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'read', status: 'running', location: { target: '/workspace/src/a.ts', kind: 'file' } } },
-      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-1', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' }, output: 'ok' } },
+      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'read', input: '{"AbsolutePath":"/workspace/src/a.ts"}', status: 'running', location: { target: '/workspace/src/a.ts', kind: 'file' } } },
+      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-1', input: '{"AbsolutePath":"/workspace/src/a.ts"}', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' }, output: 'ok' } },
     ])
   })
 

@@ -9,6 +9,17 @@ export const en = {
   resetsAt: 'Resets', updatedAt: 'Updated', account: 'Account', enableProvider: 'Enable provider', unsaved: 'Unsaved changes',
   modelCount: '{count} models', refreshModels: 'Refresh models', defaultModel: 'Default model', accountDefault: 'Account default',
   nativeModels: 'Model availability and capabilities are supplied by the native ACP runtime. This card does not override unsupported model capabilities.',
+  activityRunning: '{count} native tools running',
+  activityTools: '{count} native tools',
+  activityBetweenTurns: "Outside this turn's recorded interval; ownership unavailable.",
+  statusPending: 'Pending',
+  statusRunning: 'Running',
+  statusCompleted: 'Completed',
+  statusFailed: 'Failed',
+  activityChildUnknown: 'Child status unavailable',
+  activityFailed: 'Native tool activity is unavailable',
+  activityRetry: 'Retry',
+  activityNoOutput: 'No displayable output.',
 }
 export type AcpSettingsKey = keyof typeof en
 export const zh: Record<AcpSettingsKey, string> = {
@@ -21,4 +32,15 @@ export const zh: Record<AcpSettingsKey, string> = {
   resetsAt: '重置时间', updatedAt: '更新时间', account: '账户', enableProvider: '启用 Provider', unsaved: '有未保存修改',
   modelCount: '{count} 个模型', refreshModels: '更新模型目录', defaultModel: '默认模型', accountDefault: '跟随账户默认',
   nativeModels: '模型目录与能力由原生 ACP 运行时提供；此处不覆盖运行时未支持的模型能力。',
+  activityRunning: '{count} 个原生工具进行中',
+  activityTools: '{count} 个原生工具',
+  activityBetweenTurns: '不在本轮记录区间内；所属轮次未确认。',
+  statusPending: '待处理',
+  statusRunning: '进行中',
+  statusCompleted: '已完成',
+  statusFailed: '失败',
+  activityChildUnknown: '子任务状态不可用',
+  activityFailed: '原生工具动态暂不可用',
+  activityRetry: '重试',
+  activityNoOutput: '无可显示的输出。',
 }

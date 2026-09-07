@@ -17,5 +17,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
-  "exclude": ["src/web", "tests/web-registration.test.ts", "tests/antigravity-settings-card.test.ts"]
+  "exclude": ["src/web", "tests/web-registration.test.ts", "tests/antigravity-settings-card.test.ts", "tests/native-activity.test.ts", "tests/native-turn-container.test.ts"]
 }

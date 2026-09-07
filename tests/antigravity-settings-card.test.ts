@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AcpSettingsRow, AcpSettingsSnapshot, AntigravityQuotaSnapshot } from '../src/client-contract.ts'
-import { AntigravityCardBody } from '../src/web/ExternalAgentsSection.tsx'
+import { AntigravityCardBody, ExternalAgentsSection, type AcpSettingsFace } from '../src/web/ExternalAgentsSection.tsx'
 import { en, type AcpSettingsKey } from '../src/web/locales.ts'
 import { resolveAntigravityCardState } from '../src/web/settings-state.ts'
 
@@ -56,6 +56,21 @@ function renderBody(row: AcpSettingsRow, snapshot: AcpSettingsSnapshot, extra?: 
 }
 
 describe('antigravity settings card states', () => {
+  it('leaves the header model count empty while the snapshot is still loading', () => {
+    const face: AcpSettingsFace = {
+      t: key => en[key],
+      load: () => new Promise<AcpSettingsSnapshot>(() => {}),
+      save: () => Promise.resolve(),
+      run: () => Promise.resolve(undefined),
+      pick: () => Promise.resolve(null),
+      quota: () => new Promise<AntigravityQuotaSnapshot>(() => {}),
+    }
+    // The workspace seat is framework-provided and unread on this path.
+    const markup = renderToStaticMarkup(createElement(ExternalAgentsSection, face as never))
+    expect(markup).toContain('Antigravity')
+    expect(markup).not.toMatch(/[0-9]+ models/)
+  })
+
   it('derives missing, login, and connected only from installed and authenticated', () => {
     expect(resolveAntigravityCardState(undefined)).toBe('loading')
     expect(resolveAntigravityCardState(baseRow)).toBe('missing')

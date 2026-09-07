@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "jsx": "react-jsx", "allowImportingTsExtensions": true, "lib": ["ES2022", "DOM", "DOM.Iterable"] },
-  "include": ["src/web/**/*.ts", "src/web/**/*.tsx", "tests/web-registration.test.ts", "tests/antigravity-settings-card.test.ts"],
+  "compilerOptions": { "noEmit": true, "jsx": "react-jsx", "allowImportingTsExtensions": true, "lib": ["ES2022", "DOM", "DOM.Iterable"], "paths": { "@deepseek-ai/dsh-client-ui-slots": ["./node_modules/@deepseek-ai/dsh-client-ui-slots/lib/types/index.d.ts"] } },
+  "include": ["src/web/**/*.ts", "src/web/**/*.tsx", "tests/web-registration.test.ts", "tests/antigravity-settings-card.test.ts", "tests/native-activity.test.ts", "tests/native-turn-container.test.ts"],
   "exclude": []
 }

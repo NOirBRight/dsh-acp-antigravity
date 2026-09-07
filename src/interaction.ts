@@ -67,11 +67,45 @@ async function handlePermission(host: ExternalAgentTurnHost, params: unknown, id
   }
 }
 
+
+function permissionReason(toolCall: Record<string, unknown>, toolName: string): string {
+  const explicit = stringValue(toolCall.rawInput) ?? stringValue(toolCall.input)
+  if (explicit !== undefined && explicit.trim() !== '') return explicit.trim()
+  const details: string[] = []
+  if (toolName !== 'native tool') details.push(toolName)
+  const input = describeToolInput(toolCall.rawInput) ?? describeToolInput(toolCall.input)
+  if (input !== undefined) details.push(input)
+  const locations = describeLocations(toolCall.locations, details.join(' '))
+  if (locations !== undefined) details.push(locations)
+  if (details.length === 0) return 'Antigravity requested permission for a native action.'
+  return 'Antigravity requested permission: ' + details.join(' · ')
+}
+
+function describeToolInput(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  const parts: string[] = []
+  for (const key of ['path', 'file', 'command', 'query', 'url', 'glob', 'pattern', 'target', 'destination', 'old_path', 'new_path'] as const) {
+    const item = stringValue(value[key])?.trim()
+    if (item !== undefined && item !== '') parts.push(key + ': ' + item)
+  }
+  return parts.length === 0 ? undefined : parts.join(', ')
+}
+
+function describeLocations(value: unknown, already: string): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const paths: string[] = []
+  for (const item of value) {
+    const path = typeof item === 'string' ? item.trim() : isRecord(item) ? stringValue(item.path)?.trim() : undefined
+    if (path !== undefined && path !== '' && !already.includes(path) && !paths.includes(path)) paths.push(path)
+  }
+  return paths.length === 0 ? undefined : paths.join(', ')
+}
+
 function parsePermissionRequest(params: unknown, id: string): ExternalAgentPermissionRequest {
   if (!isRecord(params) || !Array.isArray(params.options)) throw new Error('Antigravity permission request is malformed')
   const toolCall = isRecord(params.toolCall) ? params.toolCall : {}
   const toolName = stringValue(toolCall.title) ?? stringValue(toolCall.name) ?? stringValue(toolCall.kind) ?? 'native tool'
-  const reason = stringValue(toolCall.rawInput) ?? stringValue(toolCall.input) ?? 'Antigravity requested permission for a native action.'
+  const reason = permissionReason(toolCall, toolName)
   const requestScope: 'session' | 'thread' | undefined = stringValue(params.threadId) === undefined ? stringValue(params.sessionId) === undefined ? undefined : 'session' : 'thread'
   const options = params.options.map(value => {
     if (!isRecord(value)) throw new Error('Antigravity permission option is malformed')

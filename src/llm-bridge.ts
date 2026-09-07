@@ -10,6 +10,7 @@ import {
   type ExternalAgentSession,
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
+import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
 import { isRecord } from './decode.js'
 import { toDurableToolEvents, type AntigravityToolEvent } from './tool-events.js'
@@ -34,6 +35,31 @@ export interface BridgeHost {
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
   appendSessionReady?(sessionId: string | undefined): void
   appendToolEvents?(sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void
+  /**
+   * Resolve the authoritative sandbox policy for one stream call. The host reads
+   * ctx.sandboxPolicy for the exact session; user and tool text never selects policy.
+   * Absent or unresolvable policy fails closed to approval-required.
+   */
+  resolvePolicy?(sessionId: string | undefined): AntigravitySandboxPolicy | undefined
+  /**
+   * Ask the canonical approval service for one native permission. The plugin routes
+   * the exact session agent via ctx.approval, which enforces session policy and
+   * audits itself. Generic ask stays for plan review and user-input questions.
+   * Only 'allowed-once' grants; every other outcome denies.
+   */
+  requestApproval?(input: { sessionId: string | undefined; toolName: string; reason?: string; signal?: AbortSignal }): Promise<AntigravityApprovalOutcome>
+}
+
+/** Closed outcome of one canonical approval ask. Structural mirror of the approval-service vocabulary. */
+export type AntigravityApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/**
+ * File-effect policy resolved by the host for one stream call. Structural mirror
+ * of the sandbox-policy service shape; no new dependency.
+ */
+export interface AntigravitySandboxPolicy {
+  readonly mode: 'read-only' | 'workspace-write' | 'danger-full-access'
+  readonly workspaceRoot: string
 }
 
 export function lastUserText(messages: readonly unknown[]): string {
@@ -66,16 +92,6 @@ export function acpPrompt(messages: readonly unknown[]): string {
   return skill + String.fromCharCode(10) + String.fromCharCode(10) + user
 }
 
-export function permissionModeFromMessages(messages: readonly unknown[]): 'approval-required' | 'auto-accept-edits' | 'full-access' {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const blob = textOf(messages[i]).toLowerCase()
-    if (blob.includes('danger-full-access')) return 'full-access'
-    if (blob.includes('read-only')) return 'approval-required'
-    if (blob.includes('workspace-write')) return 'auto-accept-edits'
-  }
-  return 'auto-accept-edits'
-}
-
 export function inPlanMode(messages: readonly unknown[], tools?: readonly { name?: string }[]): boolean {
   if (tools?.some(tool => tool.name === 'exit_plan_mode')) return true
   return messages.some(message => isRecord(message) && isRecord(message.source) && typeof message.source.plugin === 'string' && message.source.plugin.includes('plan'))
@@ -86,19 +102,24 @@ export function looksLikePlan(text: string): boolean {
   return heading || text.includes('plan.md') || text.includes('Proceed')
 }
 
-function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil([...text].length / 4))
-}
-
-export function workspaceRootFromMessages(messages: readonly unknown[]): string | undefined {
-  const blob = messages.map(message => textOf(message)).join(String.fromCharCode(10))
-  const match = /session workspace:\s*["']([^"']+)["']/i.exec(blob) ?? /workspace:\s*["'](\/[^"']+)["']/i.exec(blob)
-  return match?.[1]
-}
-
 function formatPlanUpdate(event: { summary: string; steps: readonly string[] }): string {
   const lines = [event.summary, ...event.steps.map(step => '- ' + step)]
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10)
+}
+
+/**
+ * Accept only fully known provider-reported usage. Both counters must be finite
+ * nonnegative integers, matching official TokenUsage: the token-meter fold does
+ * unguarded outputTokens arithmetic, so a partial sample would poison totals
+ * with NaN. Anything else is omitted, never zero-filled.
+ */
+function reportedUsage(inputTokens: unknown, outputTokens: unknown): TokenUsage | undefined {
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) return undefined
+  return { inputTokens, outputTokens }
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }
 
 function textOf(value: unknown): string {
@@ -178,11 +199,12 @@ export function createAntigravityLlmBridge(
       const installed = getProvider()
       if (installed === undefined) throw new Error('Antigravity is not configured')
       const key = options.sessionId ?? 'anonymous-' + String(++anonymousSessions)
-      const permissionMode = permissionModeFromMessages(options.messages)
+      const policy = hostAsk?.resolvePolicy?.(options.sessionId)
+      const permissionMode = policy?.mode === 'danger-full-access' ? 'full-access' : policy?.mode === 'workspace-write' ? 'auto-accept-edits' : 'approval-required'
       const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
       const natives = await nativeModels()
       const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
-      const workspaceRoot = workspaceRootFromMessages(options.messages)
+      const workspaceRoot = policy?.workspaceRoot
       let session = sessions.get(key)
       if (session === undefined) {
         const opened = await installed.openSession({
@@ -207,7 +229,8 @@ export function createAntigravityLlmBridge(
       }
       const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
       if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
-      const pending: { kind: 'thought' | 'text'; text: string }[] = []
+      type Pending = { kind: 'thought' | 'text'; text: string } | { kind: 'usage'; usage: TokenUsage }
+      const pending: Pending[] = []
       let sawPlan = false
       let wake: (() => void) | undefined
       const push = (kind: 'thought' | 'text', text: string): void => {
@@ -229,11 +252,22 @@ export function createAntigravityLlmBridge(
           else if (event.type === 'plan-update') {
             sawPlan = true
             push('text', formatPlanUpdate(event))
+          } else if (event.type === 'usage') {
+            // Forward provider-reported totals verbatim. The ACP contract defines
+            // no delta semantics, so samples pass through in order and the harness
+            // (last-wins per step) decides; never sum, estimate, or zero-fill here.
+            // Partial or invalid samples are dropped: no complete pair, no chunk.
+            const usage = reportedUsage(event.inputTokens, event.outputTokens)
+            if (usage !== undefined) {
+              pending.push({ kind: 'usage', usage })
+              wake?.()
+            }
           }
         },
         requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal, options.sessionId),
         requestUserInput: request => decideUserInput(request, hostAsk, options.signal, options.sessionId),
       })
+      const prompt = acpPrompt(options.messages)
       async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
         let { thought, text, thoughtOpen, textOpen } = start
         while (true) {
@@ -243,6 +277,10 @@ export function createAntigravityLlmBridge(
           }
           const item = pending.shift()
           if (item === undefined) break
+          if (item.kind === 'usage') {
+            yield { type: 'usage', usage: item.usage }
+            continue
+          }
           if (item.kind === 'thought') {
             if (!thoughtOpen) {
               yield { type: 'block-start', index: 0, blockType: 'reasoning' }
@@ -262,7 +300,6 @@ export function createAntigravityLlmBridge(
         await running
         return { thought, text, thoughtOpen, textOpen }
       }
-      const prompt = acpPrompt(options.messages)
       const first = session.runTurn({
         turn: turnId('t' + String(++turns)),
         prompt,
@@ -296,7 +333,6 @@ export function createAntigravityLlmBridge(
         if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
         yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
       }
-      yield { type: 'usage', usage: { inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(assembled) } }
       yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
     },
   }
@@ -309,31 +345,38 @@ async function decidePermission(
   signal?: AbortSignal,
   sessionId?: string,
 ): Promise<ExternalAgentPermissionDecision> {
-  if (mode === 'full-access' || hostAsk?.ask === undefined) {
+  if (mode === 'full-access') {
     const once = request.options.find(option => option.kind === 'allow_once') ?? request.options.find(option => option.kind === 'allow_always')
     return once === undefined ? { kind: 'unavailable' } : once.kind === 'allow_always' ? { kind: 'allowed-for-session', optionId: once.optionId } : { kind: 'allow-once', optionId: once.optionId }
   }
-  const options = request.options.map(option => ({ label: option.label, description: option.kind }))
-  const result = await hostAsk.ask({
-    questions: [{
-      id: 'permission',
-      header: 'Permission',
-      question: request.reason.length > 0 ? request.reason : request.toolName,
-      ...(options.length > 0 ? { options } : {}),
-    }],
-    ...(signal === undefined ? {} : { signal }),
-    ...(sessionId === undefined ? {} : { sessionId }),
-  })
-  const selected = result.answers[0]?.selected[0]
-  const option = request.options.find(item => item.label === selected)
-  if (option === undefined) {
-    const reject = request.options.find(item => item.kind === 'reject' || item.kind === 'cancel')
-    return { kind: 'reject', ...(reject === undefined ? {} : { optionId: reject.optionId }) }
+  const rejectOf = (): ExternalAgentPermissionDecision => {
+    const deny = request.options.find(option => option.kind === 'reject') ?? request.options.find(option => option.kind === 'cancel')
+    return deny === undefined ? { kind: 'reject' } : { kind: 'reject', optionId: deny.optionId }
   }
-  if (option.kind === 'allow_always') return { kind: 'allowed-for-session', optionId: option.optionId }
-  if (option.kind === 'allow_once') return { kind: 'allow-once', optionId: option.optionId }
-  if (option.kind === 'cancel') return { kind: 'cancel', optionId: option.optionId }
-  return { kind: 'reject', optionId: option.optionId }
+  if (hostAsk?.requestApproval === undefined) {
+    const cancel = request.options.find(option => option.kind === 'cancel')
+    return cancel === undefined ? rejectOf() : { kind: 'cancel', optionId: cancel.optionId }
+  }
+  let outcome: AntigravityApprovalOutcome
+  try {
+    outcome = await hostAsk.requestApproval({
+      sessionId,
+      toolName: request.toolName,
+      ...(request.reason.length > 0 ? { reason: request.reason } : {}),
+      ...(signal === undefined ? {} : { signal }),
+    })
+  } catch {
+    return rejectOf()
+  }
+  if (outcome === 'allowed-once') {
+    const once = request.options.find(option => option.kind === 'allow_once')
+    return once === undefined ? rejectOf() : { kind: 'allow-once', optionId: once.optionId }
+  }
+  if (outcome === 'cancelled') {
+    const cancel = request.options.find(option => option.kind === 'cancel')
+    return cancel === undefined ? rejectOf() : { kind: 'cancel', optionId: cancel.optionId }
+  }
+  return rejectOf()
 }
 
 async function decideUserInput(

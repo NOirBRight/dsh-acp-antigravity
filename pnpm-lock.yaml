@@ -8,12 +8,12 @@ importers:
 
   .:
     dependencies:
-      '@deepseek-ai/dsh-acp-provider':
-        specifier: https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.0/deepseek-ai-dsh-acp-provider-0.1.0.tgz
-        version: https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.0/deepseek-ai-dsh-acp-provider-0.1.0.tgz
       '@agentclientprotocol/sdk':
         specifier: 0.25.1
         version: 0.25.1(zod@4.5.4)
+      '@deepseek-ai/dsh-acp-provider':
+        specifier: https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.0/deepseek-ai-dsh-acp-provider-0.1.0.tgz
+        version: https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.0/deepseek-ai-dsh-acp-provider-0.1.0.tgz
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.2
@@ -24,6 +24,12 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: 0.1.2-alpha.4
         version: 0.1.2-alpha.4(@deepseek-ai/cordis@4.0.2)
+      '@deepseek-ai/dsh-client-ui-chat':
+        specifier: 0.1.2-rc.1
+        version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)
+      '@deepseek-ai/dsh-client-ui-conversation':
+        specifier: 0.1.2-rc.1
+        version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(typescript@5.9.3)
       '@deepseek-ai/dsh-client-ui-renderer':
         specifier: 0.1.2-alpha.4
         version: 0.1.2-alpha.4(@deepseek-ai/cordis@4.0.2)(react@18.3.1)

@@ -112,12 +112,14 @@ function isToolStartData(value: unknown): value is AntigravityToolStartData {
   if (!isRecord(value)) return false
   if (stringValue(value.toolId) === undefined || stringValue(value.name) === undefined) return false
   if (!isToolStatus(value.status)) return false
+  if (value.input !== undefined && typeof value.input !== 'string') return false
   return value.location === undefined || isToolLocation(value.location)
 }
 
 function isToolUpdateData(value: unknown): value is AntigravityToolUpdateData {
   if (!isRecord(value)) return false
   if (stringValue(value.toolId) === undefined || !isToolStatus(value.status)) return false
+  if (value.input !== undefined && typeof value.input !== 'string') return false
   if (value.location !== undefined && !isToolLocation(value.location)) return false
   if (value.output !== undefined && typeof value.output !== 'string') return false
   return value.error === undefined || typeof value.error === 'string'

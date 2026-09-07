@@ -20,12 +20,14 @@ export interface AntigravityToolStartData {
   readonly name: string
   readonly status: AntigravityToolStatus
   readonly location?: AntigravityToolLocation
+  readonly input?: string
 }
 
 export interface AntigravityToolUpdateData {
   readonly toolId: string
   readonly status: AntigravityToolStatus
   readonly location?: AntigravityToolLocation
+  readonly input?: string
   readonly output?: string
   readonly error?: string
 }
@@ -67,6 +69,7 @@ export interface AntigravityToolState extends AntigravityToolStartData {
 export function toDurableToolEvents(activity: AntigravityToolActivity, seen: ReadonlySet<string>, workspaceRoot?: string): readonly AntigravityToolEvent[] {
   if (activity.toolId.trim() === '') throw new Error('Antigravity tool activity has no id')
   const known = seen.has(activity.toolId)
+  const input = activity.input === undefined ? undefined : truncate(activity.input)
   const output = outputText(activity.output)
   const location = locationOf(activity, workspaceRoot)
   const update: AntigravityToolEvent = {
@@ -75,6 +78,7 @@ export function toDurableToolEvents(activity: AntigravityToolActivity, seen: Rea
       toolId: activity.toolId,
       status: activity.status,
       ...(known && location !== undefined ? { location } : {}),
+      ...(known && input !== undefined ? { input } : {}),
       ...(output === undefined ? {} : { output }),
       ...(activity.error === undefined || activity.error.length === 0 ? {} : { error: truncate(activity.error) }),
     },
@@ -85,6 +89,7 @@ export function toDurableToolEvents(activity: AntigravityToolActivity, seen: Rea
     data: {
       toolId: activity.toolId,
       name: toolName(activity),
+      ...(input === undefined ? {} : { input }),
       status: activity.status,
       ...(location === undefined ? {} : { location }),
     },
@@ -109,6 +114,7 @@ export function foldAntigravityToolEvent(state: AntigravityToolState | undefined
       name: 'native tool',
       status: event.data.status,
       ...(event.data.location === undefined ? {} : { location: event.data.location }),
+      ...(event.data.input === undefined ? {} : { input: event.data.input }),
       ...(event.data.output === undefined ? {} : { output: event.data.output }),
       ...(event.data.error === undefined ? {} : { error: event.data.error }),
     }
@@ -118,6 +124,7 @@ export function foldAntigravityToolEvent(state: AntigravityToolState | undefined
     ...state,
     status: event.data.status,
     ...(event.data.location === undefined ? {} : { location: event.data.location }),
+    ...(event.data.input === undefined ? {} : { input: event.data.input }),
     ...(event.data.output === undefined ? {} : { output: event.data.output }),
     ...(event.data.error === undefined ? {} : { error: event.data.error }),
   }
@@ -154,7 +161,7 @@ function outputText(raw: string | undefined): string | undefined {
   const output = recordOf(raw)
   const normalized = stringAt(output, 'combinedOutput') ?? stringAt(output, 'formatted_output') ?? stringAt(output, 'output')
   if (normalized !== undefined) return truncate(normalized)
-  return raw.startsWith('{') || raw.startsWith('[') ? undefined : truncate(raw)
+  return truncate(raw)
 }
 
 function recordOf(raw: string | undefined): Record<string, unknown> | undefined {

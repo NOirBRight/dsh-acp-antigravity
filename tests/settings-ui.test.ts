@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AcpSettingsRow } from '../src/client-contract.ts'
-import { mergeSettingsDraft } from '../src/web/settings-state.js'
+import { mergeSettingsDraft, shouldClearQuota } from '../src/web/settings-state.js'
 import { createAntigravityUsageReader } from '../src/web/usage-reader.js'
 
 const row: AcpSettingsRow = { provider: 'antigravity', instanceId: 'default', title: 'Antigravity', enabled: true, executablePath: '/runtime/agy', harnessPath: '/runtime/harness', stateDirectory: '/profile', models: [], installed: true, authenticated: true, live: false, ready: true }
 
 describe('settings snapshots and quota view', () => {
+  it('retains first-paint quota only until authoritative logout or profile change', () => {
+    expect(shouldClearQuota(undefined, row)).toBe(false)
+    expect(shouldClearQuota(row, { ...row })).toBe(false)
+    expect(shouldClearQuota(row, { ...row, authenticated: false })).toBe(true)
+    expect(shouldClearQuota(row, { ...row, instanceId: 'other' })).toBe(true)
+    expect(shouldClearQuota(row, { ...row, stateDirectory: '/other' })).toBe(true)
+    expect(shouldClearQuota(row, undefined)).toBe(true)
+  })
+
   it('keeps unsaved config while accepting live auth and catalog updates, but never across profiles', () => {
     const draft = { ...row, executablePath: '/edited/agy', model: 'model-a' }
     const incoming = { ...row, authenticated: false, models: [{ id: 'model-b', name: 'Model B' }] }

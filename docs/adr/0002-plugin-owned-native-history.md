@@ -1,8 +1,8 @@
 # Keep native activity independent of Core history
 
-**Status:** accepted for plugin-owned storage, authenticated `activity/read` RPC, and binding enforcement. The original `conversation.view` presentation is superseded; no Antigravity conversation tab is registered. Official Chat and Trajectory views remain unchanged. Supersedes the inline activity presentation in [the native-agent decision](0001-native-agent-on-dsh.md).
+**Status:** accepted for plugin-owned storage, authenticated `activity/read` RPC, binding enforcement, and read-only per-turn Chat containers. No Antigravity conversation tab is registered. Supersedes the inline activity presentation in [the native-agent decision](0001-native-agent-on-dsh.md).
 
-DSH owns the basic conversation; the Antigravity plugin owns native activity and runtime bindings in separate versioned storage. The rc1 writer cannot mark external events ignorable, and public inline tool slots require genuine DSH tool calls, so the original presentation used the public `conversation.view` slot rather than custom Core events, fabricated tool calls, package replacement or private hooks. Native activity is now available through authenticated `activity/read` RPC without a separate conversation view. Basic history remains readable independently of the plugin.
+DSH owns the basic conversation; the Antigravity plugin owns native activity and runtime bindings in separate versioned storage. The rc1 writer cannot mark external events ignorable, and public inline tool slots require genuine DSH tool calls, so the original presentation used the public `conversation.view` slot rather than custom Core events, fabricated tool calls, package replacement or private hooks. Native activity is available through authenticated `activity/read` RPC. A plugin-owned Chat container folds standard `turn/start` and `turn/end` events and reads the sidecar for that turn; it writes no Core events and creates no executable tool calls. Rows retain their first-observed turn when results arrive later. Basic history remains readable independently of the plugin.
 
 ## Consequences
 

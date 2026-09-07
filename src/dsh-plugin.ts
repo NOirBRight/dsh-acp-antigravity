@@ -7,6 +7,7 @@ import { AntigravityActivityStore, type AntigravityActivityEvent } from './activ
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { openDefaultBrowser } from './browser.js'
+import { collapseAntigravityModels } from './catalog.js'
 import { createAntigravityLlmBridge } from './llm-bridge.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
@@ -56,8 +57,67 @@ function resolvePluginConfig(config: DshPluginConfig, persisted?: AcpAntigravity
 }
 
 function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown {
-  const agents = ctx.get?.('agents') as { get?: (id: string) => unknown; roots?: () => unknown[] } | undefined
-  return (sessionId === undefined ? undefined : agents?.get?.(sessionId)) ?? agents?.roots?.()[0]
+  if (sessionId === undefined) return undefined
+  const agents = ctx.get?.('agents') as { get?: (id: string) => unknown } | undefined
+  return agents?.get?.(sessionId)
+}
+
+/** File-effect policy modes shared with the sandbox-policy service (structural, no new dependency). */
+type SandboxPolicyMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+
+/**
+ * Resolve the authoritative sandbox policy for the exact session. A missing
+ * service, unresolvable session, failed read, or unknown shape fails closed;
+ * user and tool text never selects policy. No first-root fallback.
+ */
+function resolveSandboxPolicy(ctx: DshPluginContext, sessionId: string | undefined): { mode: SandboxPolicyMode; workspaceRoot: string } | undefined {
+  const policy = ctx.get?.('sandboxPolicy') as { resolve?: (request?: { session?: unknown }) => { mode?: unknown; workspaceRoot?: unknown } } | undefined
+  if (typeof policy?.resolve !== 'function') return undefined
+  const agents = ctx.get?.('agents') as { get?: (id: string) => { session?: unknown } | undefined } | undefined
+  const session = sessionId === undefined ? undefined : agents?.get?.(sessionId)?.session
+  if (session === undefined) return undefined
+  let resolved: { mode?: unknown; workspaceRoot?: unknown }
+  try {
+    resolved = policy.resolve({ session })
+  } catch {
+    return undefined
+  }
+  if (resolved.mode !== 'read-only' && resolved.mode !== 'workspace-write' && resolved.mode !== 'danger-full-access') return undefined
+  if (typeof resolved.workspaceRoot !== 'string' || resolved.workspaceRoot === '') return undefined
+  return { mode: resolved.mode, workspaceRoot: resolved.workspaceRoot }
+}
+
+/** Closed approval outcome shared with the bridge (structural, no new dependency). */
+export type NativeApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/** Native permission ask routed through the canonical approval service. */
+export interface NativeApprovalInput {
+  readonly sessionId: string | undefined
+  readonly toolName: string
+  readonly reason?: string
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Ask the canonical approval service for one native permission. Routes the exact
+ * session agent; the service enforces session policy and audits itself. Never
+ * passes a native tool id as the Core call id. A missing service or session
+ * cancels; a throwing service is unavailable. Generic ask is not consulted.
+ */
+export async function requestNativeApproval(ctx: DshPluginContext, input: NativeApprovalInput): Promise<NativeApprovalOutcome> {
+  const service = ctx.get?.('approval') as { request?: (req: { agent: unknown; toolName: string; reason?: string; signal?: AbortSignal }) => Promise<NativeApprovalOutcome> } | undefined
+  const agent = agentFor(ctx, input.sessionId)
+  if (typeof service?.request !== 'function' || agent === undefined) return 'cancelled'
+  try {
+    return await service.request({
+      agent,
+      toolName: input.toolName,
+      ...(input.reason === undefined || input.reason === '' ? {} : { reason: input.reason }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    })
+  } catch {
+    return 'unavailable'
+  }
 }
 
 function toProviderConfig(config: AcpAntigravitySettingsConfig) {
@@ -156,6 +216,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         },
         appendSessionReady: sessionId => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }]) },
         appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendActivity(sessionId, events) },
+        resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
+        requestApproval: input => requestNativeApproval(ctx, input),
       })
       scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
     })
@@ -172,7 +234,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         catch { return { groups: [] } }
       }
       if (models.length === 0) return { groups: [] }
-      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: models.map(model => ({ id: model.id, name: model.name })) }] }
+      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: collapseAntigravityModels(models) }] }
     },
     applyConfig: async next => {
       await mount(next)

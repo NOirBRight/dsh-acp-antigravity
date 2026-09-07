@@ -97,7 +97,7 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
     if (!nativeToolId) throw new Error('Antigravity tool update has no id')
     const status = normalizeToolStatus(update.status ?? update.state)
     const input = stringifyPayload(update.rawInput ?? update.input)
-    const output = stringifyPayload(update.rawOutput ?? update.output)
+    const output = stringifyPayload(update.rawOutput ?? update.output ?? update.content)
     const error = stringValue(update.error)
     const locations = Array.isArray(update.locations) ? update.locations.map(normalizeToolLocation).filter(location => location !== undefined) : undefined
     return boundExternalAgentEvent({

@@ -2,11 +2,12 @@
 import React, { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ProviderCardHeader, ProviderQuotaMeter, providerUiCss } from 'dsh-llm-providers-ui/provider-ui'
+import { dropPersistedUsageKeys, headerQuotaFromCache, peekCachedUsage, rememberHeadlineQuota } from 'dsh-llm-providers-ui/usage-readers'
 import type { AcpSettingsRow, AcpSettingsSnapshot, AntigravityQuotaSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
 import { BrandMark } from './BrandMark.tsx'
 import type {} from 'dsh-llm-providers-ui/client'
-import { mergeSettingsDraft, resolveAntigravityCardState, type AntigravityCardState } from './settings-state.ts'
+import { mergeSettingsDraft, shouldClearQuota, resolveAntigravityCardState, type AntigravityCardState } from './settings-state.ts'
 
 /** Live Settings operations injected by the client plugin. Paths stay in the row for save only. */
 export interface AcpSettingsFace {
@@ -120,10 +121,10 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: 
   const quotaAbort = useRef<AbortController>()
   const mounted = useRef(false)
   const fail = (caught: unknown): void => { if (mounted.current) setError(caught instanceof Error ? caught.message : t('failed')) }
-  const clearQuota = (): void => { quotaEpoch.current++; quotaAbort.current?.abort(); setQuota(undefined); setQuotaError(undefined); setQuotaLoading(false) }
+  const clearQuota = (): void => { dropPersistedUsageKeys(['antigravity']); quotaEpoch.current++; quotaAbort.current?.abort(); setQuota(undefined); setQuotaError(undefined); setQuotaLoading(false) }
   const accept = (next: AcpSettingsSnapshot): void => {
     const previous = snapshotRef.current?.rows[0], incoming = next.rows[0]
-    if (previous?.instanceId !== incoming?.instanceId || previous?.stateDirectory !== incoming?.stateDirectory || !incoming?.authenticated) clearQuota()
+    if (shouldClearQuota(previous, incoming)) clearQuota()
     snapshotRef.current = next
     setSnapshot(next)
     setDraft(current => mergeSettingsDraft(current, incoming, dirtyRef.current))
@@ -136,8 +137,15 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: 
     try {
       const next = await readQuota(controller.signal)
       if (!mounted.current || request !== quotaEpoch.current) return
-      if (next.status === 'ready') { setQuota(next); setQuotaError(undefined) }
-      else { if (next.status !== 'error') setQuota(undefined); setQuotaError(next.message ?? t('quotaUnavailable')) }
+      if (next.status === 'ready') {
+        setQuota(next); setQuotaError(undefined)
+        const hit = next.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
+        if (hit?.bucket.remainingFraction !== undefined) rememberHeadlineQuota('antigravity', 'Antigravity', {
+          label: [hit.group, hit.bucket.window ?? hit.bucket.displayName].filter(Boolean).join(' · '),
+          remainingPercent: Math.round(hit.bucket.remainingFraction * 1000) / 10,
+        })
+      }
+      else { if (next.status !== 'error') clearQuota(); setQuotaError(next.message ?? t('quotaUnavailable')) }
     } catch (caught) {
       if (mounted.current && request === quotaEpoch.current && !controller.signal.aborted) setQuotaError(caught instanceof Error ? caught.message : t('quotaUnavailable'))
     } finally { if (mounted.current && request === quotaEpoch.current) setQuotaLoading(false) }
@@ -193,11 +201,12 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: 
   const state = resolveAntigravityCardState(row)
   const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'login' ? t('authBadge') : t('connected')
   const first = quota?.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
-  const headerQuota = first === undefined ? undefined : { ...(first.bucket.remainingFraction === undefined ? {} : { remainingFraction: first.bucket.remainingFraction }), label: [first.group, first.bucket.window ?? first.bucket.displayName].filter(Boolean).join(' · '), ...(quotaError === undefined ? {} : { detail: t('staleQuota') }) }
+  const liveQuota = first === undefined ? undefined : { remainingPercent: Math.round(first.bucket.remainingFraction! * 1000) / 10, label: [first.group, first.bucket.window ?? first.bucket.displayName].filter(Boolean).join(' · '), ...(quotaError === undefined ? {} : { detail: t('staleQuota') }) }
+  const headerQuota = snapshot !== undefined && !snapshot.rows[0]?.authenticated ? undefined : liveQuota ?? headerQuotaFromCache(peekCachedUsage('antigravity'))
   return <section data-provider-card="antigravity" data-provider-role="agent">
     <style>{providerUiCss + localCss}</style>
     <button type="button" data-provider-card-header aria-expanded={open} onClick={() => setOpen(!open)}>
-      <ProviderCardHeader title="Antigravity" mark={<BrandMark />} role="agent" summary={t('modelCount').replace('{count}', String(row?.models.length ?? 0))} status={status} open={open} unsaved={dirty} unsavedLabel={t('unsaved')} {...(headerQuota === undefined ? {} : { quota: headerQuota })} />
+      <ProviderCardHeader title="Antigravity" mark={<BrandMark />} role="agent" summary={row === undefined ? '' : t('modelCount').replace('{count}', String(row.models.length))} status={status} open={open} unsaved={dirty} unsavedLabel={t('unsaved')} {...(headerQuota === undefined ? {} : { quota: headerQuota })} />
     </button>
     <div data-provider-body hidden={!open}>
       {error && <p role="alert" style={{ ...muted, color: 'var(--dsw-alias-state-error-primary)' }}>{error}</p>}
