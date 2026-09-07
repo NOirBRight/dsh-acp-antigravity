@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true, "jsx": "react-jsx", "allowImportingTsExtensions": true, "lib": ["ES2022", "DOM", "DOM.Iterable"] },
-  "include": ["src/web/**/*.ts", "src/web/**/*.tsx", "tests/web-registration.test.ts", "tests/antigravity-tool-node.test.ts"],
+  "include": ["src/web/**/*.ts", "src/web/**/*.tsx", "tests/web-registration.test.ts", "tests/antigravity-settings-card.test.ts"],
   "exclude": []
 }

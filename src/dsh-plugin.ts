@@ -232,7 +232,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         }
         return found
       }
-      if (action === 'sign-in' || action === 'sign-out') {
+      // Sign-in is handled above with a coalesced provider.signIn job; only sign-out reaches the editor here.
+      if (action === 'sign-out') {
         try {
           return await editor.run(action, signal)
         } finally {

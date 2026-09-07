@@ -1,9 +1,8 @@
-/** Browser half: External Agents page inside Settings, plus the native activity sidecar view. */
+/** Browser half: External Agents settings and Provider Directory quota. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from 'dsh-llm-providers-ui/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
@@ -19,8 +18,6 @@ import {
   type AcpSettingsRow,
 } from '../client-contract.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
-import { ACTIVITY_ENDPOINT, decodeActivityHistory, type AntigravityActivityHistory } from '../activity-contract.ts'
-import { AntigravityActivityView, type AntigravityActivityFace } from './AntigravityActivityView.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
 
@@ -89,25 +86,6 @@ export function apply(ctx: ClientContext): void {
     const path = (result.value as { path?: string | null }).path
     return path ?? null
   }
-  ctx.effect(() => ctx.slots.inject('conversation.view', () => ctx.slots.register({
-    name: 'conversation.view',
-    id: 'antigravity',
-    order: 11,
-    locale: localeNamespace,
-    label: () => t('activityView'),
-    inject: (sessionId: string): AntigravityActivityFace => ({
-      t,
-      read: async signal => {
-        const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, ACTIVITY_ENDPOINT, { sessionId }, signal)
-        if (!result.ok) throw new Error(result.error.message)
-        try {
-          return decodeActivityHistory(result.value)
-        } catch {
-          throw new Error(t('activityFailed')) /* Corrupt sidecar history stays a local tab error. */
-        }
-      },
-    }),
-  }, AntigravityActivityView)), 'dsh-acp-antigravity: native activity sidecar view')
   ctx.slots.inject('settings.provider.item', () => ctx.slots.register({
     name: 'settings.provider.item',
     key: 'antigravity',

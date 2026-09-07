@@ -51,7 +51,7 @@ A DSH parent loop starts a child whose selected model is Antigravity. The child 
 _Avoid_: ACP nested agent as DSH subagent, delegate RPC
 
 **ACP tool row**:
-Native tool activity rendered by a conversation node that copies DSH ToolRow tokens. Not a DSH `tool-call` block (the loop would execute it).
+Persisted plugin-owned native tool activity, readable via the authenticated `activity/read` RPC; never a DSH `tool-call` block (the loop would execute it) and never a conversation tab (official Chat/Trajectory unchanged).
 _Avoid_: Markdown dump, fake DSH tool
 
 **Vendor mark**:

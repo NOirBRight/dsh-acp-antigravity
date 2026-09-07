@@ -29,7 +29,6 @@
       "inject": [
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-settings"
@@ -38,11 +37,9 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-acp-provider": ">=0.1.0",
     "@deepseek-ai/cordis": ">=4.0.2 <5.0.0",
     "@deepseek-ai/dsh-client-connection": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
     "@deepseek-ai/dsh-client-locale": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.2-alpha.4 <1.0.0 || 0.1.2-alpha.5 || 0.1.2-rc.1",
@@ -55,7 +52,6 @@
     "@deepseek-ai/cordis": { "optional": true },
     "@deepseek-ai/dsh-client-connection": { "optional": true },
     "@deepseek-ai/dsh-client-locale": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
     "@deepseek-ai/dsh-client-ui-renderer": { "optional": true },
     "@deepseek-ai/dsh-client-ui-settings": { "optional": true },
     "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
@@ -65,16 +61,14 @@
     "react-dom": { "optional": true }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.0/deepseek-ai-dsh-acp-provider-0.1.0.tgz",
     "@agentclientprotocol/sdk": "0.25.1"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-ui-chat": "0.1.2-rc.1",
-    "dsh-llm-providers-ui": "file:../dsh-providers-settings-a",
+    "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz",
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-acp-provider": "file:../dsh-acp-provider-settings",
     "@deepseek-ai/dsh-client-connection": "0.1.2-alpha.4",
     "@deepseek-ai/dsh-client-locale": "0.1.2-alpha.4",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": "0.1.2-alpha.4",
     "@deepseek-ai/dsh-client-ui-settings": "0.1.2-alpha.4",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.2-alpha.4",

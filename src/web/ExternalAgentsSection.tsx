@@ -1,13 +1,14 @@
-/** Antigravity provider settings: live ACP configuration and account quota, never CLI output. */
-import { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+/** Antigravity provider settings: state-driven Install, Sign in, then Account/Quota/Model. Runtime paths stay in backend config only. */
+import React, { useEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ProviderCardHeader, ProviderQuotaMeter, providerUiCss } from 'dsh-llm-providers-ui/provider-ui'
 import type { AcpSettingsRow, AcpSettingsSnapshot, AntigravityQuotaSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
 import { BrandMark } from './BrandMark.tsx'
 import type {} from 'dsh-llm-providers-ui/client'
-import { mergeSettingsDraft } from './settings-state.ts'
+import { mergeSettingsDraft, resolveAntigravityCardState, type AntigravityCardState } from './settings-state.ts'
 
+/** Live Settings operations injected by the client plugin. Paths stay in the row for save only. */
 export interface AcpSettingsFace {
   t: (key: AcpSettingsKey) => string
   load: () => Promise<AcpSettingsSnapshot>
@@ -16,7 +17,29 @@ export interface AcpSettingsFace {
   pick: () => Promise<string | null>
   quota: (signal?: AbortSignal) => Promise<AntigravityQuotaSnapshot>
 }
+/** Runtime props for the provider card slot. */
 export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'> & InjectFace<AcpSettingsFace>
+/** Pure state-driven card body: sections order follows missing, login, connected. */
+export interface AntigravityCardBodyProps {
+  readonly t: (key: AcpSettingsKey) => string
+  readonly row: AcpSettingsRow
+  readonly snapshot: AcpSettingsSnapshot
+  readonly state: AntigravityCardState
+  readonly quota?: AntigravityQuotaSnapshot
+  readonly quotaError?: string
+  readonly quotaLoading: boolean
+  readonly working: boolean
+  readonly polling: boolean
+  readonly saving: boolean
+  readonly dirty: boolean
+  readonly onToggleEnabled: () => void
+  readonly onAction: (name: string) => void
+  readonly onRefresh: () => void
+  readonly onRefreshQuota: () => void
+  readonly onModelChange: (model: string | undefined) => void
+  readonly onPersist: () => void
+  readonly onDiscard: () => void
+}
 const field: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, minWidth: 0 }
 const control: CSSProperties = { width: '100%', minWidth: 0, minHeight: 36, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 5, padding: '7px 10px', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-1)' }
 const button: CSSProperties = { ...control, width: 'auto', cursor: 'pointer' }
@@ -25,7 +48,61 @@ const section: CSSProperties = { padding: '18px 0', borderTop: '1px solid var(--
 const muted: CSSProperties = { margin: 0, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'anywhere' }
 const localCss = '[data-provider-body][hidden]{display:none!important}[data-antigravity-quota]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 24px}[data-antigravity-heading]{font-size:13px;font-weight:600;margin:0}@media(max-width:680px){[data-antigravity-quota]{grid-template-columns:1fr}[data-provider-card="antigravity"] button,[data-provider-card="antigravity"] select,[data-provider-card="antigravity"] input:not([type=checkbox]){min-height:44px}}'
 
-export function ExternalAgentsSection({ t, load, save, run, pick, quota: readQuota }: ExternalAgentsSectionProps): JSX.Element {
+/** Render Install at top when missing, Sign in at top when installed, Account/Quota/Model when connected.
+ * @param props the live row, snapshot, quota, and state callbacks.
+ * @returns the ordered card sections without runtime path internals.
+ */
+export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError, quotaLoading, working, polling, saving, dirty, onToggleEnabled, onAction, onRefresh, onRefreshQuota, onModelChange, onPersist, onDiscard }: AntigravityCardBodyProps): JSX.Element {
+  const phase = snapshot.install?.phase
+  const installActive = phase === 'downloading' || phase === 'extracting' || phase === 'verifying'
+  const showInstall = state === 'missing' || installActive || phase === 'failed'
+  return <>
+    {showInstall && <section style={section}>
+      <h3 data-antigravity-heading>{t('install')}</h3>
+      <p style={muted}>{row.message ?? t('missingBadge')}</p>
+      {snapshot.install && phase !== 'idle' && <p role="status" style={muted}>{snapshot.install.message}{snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}</p>}
+      <div style={actions}>
+        <button type="button" style={button} disabled={working || polling} onClick={() => onAction('install-runtime')}>{polling ? t('installing') : t('install')}</button>
+        <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>
+      </div>
+    </section>}
+    <section style={section}>
+      <h3 data-antigravity-heading>{t('account')}</h3>
+      <label style={actions}><input type="checkbox" disabled={saving || working} checked={row.enabled} onChange={onToggleEnabled} />{t('enableProvider')}</label>
+      <p style={muted}>{[row.version, row.message].filter(Boolean).join(' · ')}</p>
+      <div style={actions}>
+        {state !== 'missing' && <button type="button" style={button} disabled={working || polling} onClick={() => onAction(row.authenticated ? 'sign-out' : 'sign-in')}>{snapshot.signingIn ? t('signingIn') : row.authenticated ? t('signOut') : t('signIn')}</button>}
+        {state !== 'missing' && row.authorizationUrl && <button type="button" style={button} disabled={working} onClick={() => onAction('open-login')}>{t('openLogin')}</button>}
+        {!showInstall && <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>}
+      </div>
+    </section>
+    {state === 'connected' && <section style={section}>
+      <div style={{ ...actions, justifyContent: 'space-between' }}><h3 data-antigravity-heading>{t('quota')}</h3><button type="button" style={button} disabled={!row.authenticated || quotaLoading || working} onClick={onRefreshQuota}>{quotaLoading ? t('loading') : t('refreshQuota')}</button></div>
+      {quotaError && <p role="status" style={muted}>{quotaError}{quota ? ' · ' + t('staleQuota') : ''}</p>}
+      {!quota && !quotaError && <p style={muted}>{t('quotaUnavailable')}</p>}
+      {quota?.groups.map((group, gi) => <div key={gi}><h3 data-antigravity-heading>{group.displayName ?? t('quota')}</h3><div data-antigravity-quota>{group.buckets.map((bucket, bi) => <div key={bucket.bucketId ?? bi}>
+        <ProviderQuotaMeter label={bucket.displayName ?? bucket.window ?? t('quota')} {...(bucket.disabled || bucket.remainingFraction === undefined ? {} : { remainingFraction: bucket.remainingFraction })} emptyLabel={bucket.disabled ? t('disabledBadge') : t('quotaUnavailable')} {...(bucket.resetTime ? { detail: t('resetsAt') + ' ' + new Date(bucket.resetTime).toLocaleString() } : {})} />
+      </div>)}</div></div>)}
+      {quota && <p style={muted}>{t('updatedAt')} {new Date(quota.observedAt).toLocaleString()}</p>}
+    </section>}
+    {state === 'connected' && <section style={section}>
+      <div style={{ ...actions, justifyContent: 'space-between' }}><h3 data-antigravity-heading>{t('model')}</h3><button type="button" style={button} disabled={!row.authenticated || working} onClick={() => onAction('refresh-models')}>{t('refreshModels')}</button></div>
+      <label style={field}>{t('defaultModel')}<select style={control} value={row.model ?? ''} disabled={saving} onChange={event => onModelChange(event.target.value === '' ? undefined : event.target.value)}><option value="">{t('accountDefault')}</option>{row.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
+      <p style={muted}>{t('nativeModels')}</p>
+    </section>}
+    <footer style={{ ...section, ...actions, justifyContent: 'flex-end' }}>
+      {dirty && <span style={{ ...muted, marginRight: 'auto' }}>{t('unsaved')}</span>}
+      <button type="button" style={button} disabled={!dirty || saving} onClick={onDiscard}>{t('cancel')}</button>
+      <button type="button" style={button} disabled={!dirty || saving || working} onClick={onPersist}>{saving ? t('saving') : t('save')}</button>
+    </footer>
+  </>
+}
+
+/** Provider card container: live snapshot, quota, install/sign-in actions, and shared header.
+ * @param props the injected Settings face.
+ * @returns the collapsible Antigravity provider card.
+ */
+export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: ExternalAgentsSectionProps): JSX.Element {
   const [open, setOpen] = useState(false)
   const [snapshot, setSnapshot] = useState<AcpSettingsSnapshot>()
   const [draft, setDraft] = useState<AcpSettingsRow>()
@@ -112,16 +189,9 @@ export function ExternalAgentsSection({ t, load, save, run, pick, quota: readQuo
     try { await save(draft); dirtyRef.current = false; setDirty(false); await refresh() } catch (caught) { fail(caught) }
     finally { if (mounted.current) setSaving(false) }
   }
-  const locate = async (target: 'executablePath' | 'harnessPath'): Promise<void> => {
-    try {
-      const path = await pick()
-      if (!mounted.current || path === null) return
-      dirtyRef.current = true; setDirty(true)
-      setDraft(current => current === undefined ? current : { ...current, [target]: path, ...(target === 'executablePath' && current.harnessPath === '' ? { harnessPath: path.replace(/agy_acp_server[^/]*$/u, 'localharness_external') } : {}) })
-    } catch (caught) { fail(caught) }
-  }
   const row = draft
-  const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : !row.installed ? t('missingBadge') : !row.authenticated ? t('authBadge') : t('connected')
+  const state = resolveAntigravityCardState(row)
+  const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'login' ? t('authBadge') : t('connected')
   const first = quota?.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
   const headerQuota = first === undefined ? undefined : { ...(first.bucket.remainingFraction === undefined ? {} : { remainingFraction: first.bucket.remainingFraction }), label: [first.group, first.bucket.window ?? first.bucket.displayName].filter(Boolean).join(' · '), ...(quotaError === undefined ? {} : { detail: t('staleQuota') }) }
   return <section data-provider-card="antigravity" data-provider-role="agent">
@@ -131,44 +201,15 @@ export function ExternalAgentsSection({ t, load, save, run, pick, quota: readQuo
     </button>
     <div data-provider-body hidden={!open}>
       {error && <p role="alert" style={{ ...muted, color: 'var(--dsw-alias-state-error-primary)' }}>{error}</p>}
-      {row && snapshot ? <>
-        <section style={section}>
-          <h3 data-antigravity-heading>{t('account')}</h3>
-          <label style={actions}><input type="checkbox" disabled={saving || working} checked={row.enabled} onChange={() => change({ ...row, enabled: !row.enabled })} />{t('enableProvider')}</label>
-          <p style={muted}>{[row.version, row.message].filter(Boolean).join(' · ')}</p>
-          <div style={actions}>
-            <button type="button" style={button} disabled={working || polling} onClick={() => void action(row.authenticated ? 'sign-out' : 'sign-in')}>{snapshot.signingIn ? t('signingIn') : row.authenticated ? t('signOut') : t('signIn')}</button>
-            {row.authorizationUrl && <button type="button" style={button} disabled={working} onClick={() => void action('open-login')}>{t('openLogin')}</button>}
-            <button type="button" style={button} disabled={working || polling} onClick={() => void refresh().catch(fail)}>{t('rescan')}</button>
-          </div>
-        </section>
-        <section style={section}>
-          <div style={{ ...actions, justifyContent: 'space-between' }}><h3 data-antigravity-heading>{t('quota')}</h3><button type="button" style={button} disabled={!row.authenticated || quotaLoading || working} onClick={() => void fetchQuota()}>{quotaLoading ? t('loading') : t('refreshQuota')}</button></div>
-          {quotaError && <p role="status" style={muted}>{quotaError}{quota ? ' · ' + t('staleQuota') : ''}</p>}
-          {!quota && !quotaError && <p style={muted}>{row.authenticated ? t('quotaUnavailable') : t('authBadge')}</p>}
-          {quota?.groups.map((group, gi) => <div key={gi}><h3 data-antigravity-heading>{group.displayName ?? t('quota')}</h3><div data-antigravity-quota>{group.buckets.map((bucket, bi) => <div key={bucket.bucketId ?? bi}>
-            <ProviderQuotaMeter label={bucket.displayName ?? bucket.window ?? t('quota')} {...(bucket.disabled || bucket.remainingFraction === undefined ? {} : { remainingFraction: bucket.remainingFraction })} emptyLabel={bucket.disabled ? t('disabledBadge') : t('quotaUnavailable')} {...(bucket.resetTime ? { detail: t('resetsAt') + ' ' + new Date(bucket.resetTime).toLocaleString() } : {})} />
-          </div>)}</div></div>)}
-          {quota && <p style={muted}>{t('updatedAt')} {new Date(quota.observedAt).toLocaleString()}</p>}
-        </section>
-        <section style={section}>
-          <div style={{ ...actions, justifyContent: 'space-between' }}><h3 data-antigravity-heading>{t('model')}</h3><button type="button" style={button} disabled={!row.authenticated || working} onClick={() => void action('refresh-models')}>{t('refreshModels')}</button></div>
-          <label style={field}>{t('defaultModel')}<select style={control} value={row.model ?? ''} disabled={saving} onChange={event => { const next = { ...row }; if (event.target.value) next.model = event.target.value; else delete next.model; change(next) }}><option value="">{t('accountDefault')}</option>{row.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
-          <p style={muted}>{t('nativeModels')}</p>
-        </section>
-        <details style={section}><summary>{t('advanced')}</summary>
-          <label style={field}>{t('executable')}<input style={control} value={row.executablePath} disabled={saving} onChange={event => change({ ...row, executablePath: event.target.value })} /><button type="button" style={button} disabled={saving} onClick={() => void locate('executablePath')}>{t('locateAcp')}</button></label>
-          <label style={field}>{t('harness')}<input style={control} value={row.harnessPath} disabled={saving} onChange={event => change({ ...row, harnessPath: event.target.value })} /><button type="button" style={button} disabled={saving} onClick={() => void locate('harnessPath')}>{t('locateHarness')}</button></label>
-          {row.profileDirectory && <p style={muted}>{t('profile')}: {row.profileDirectory}</p>}
-          {snapshot.install && phase !== 'idle' && <p role="status" style={muted}>{snapshot.install.message}{snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}</p>}
-          <button type="button" style={button} disabled={working || polling} onClick={() => void action('install-runtime')}>{polling ? t('installing') : t('install')}</button>
-        </details>
-        <footer style={{ ...section, ...actions, justifyContent: 'flex-end' }}>
-          {dirty && <span style={{ ...muted, marginRight: 'auto' }}>{t('unsaved')}</span>}
-          <button type="button" style={button} disabled={!dirty || saving} onClick={() => { dirtyRef.current = false; setDirty(false); setDraft(snapshot.rows[0]) }}>{t('cancel')}</button>
-          <button type="button" style={button} disabled={!dirty || saving || working} onClick={() => void persist()}>{saving ? t('saving') : t('save')}</button>
-        </footer>
-      </> : <p role="status" style={muted}>{t('loading')}</p>}
+      {row && snapshot ? <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
+        onToggleEnabled={() => change({ ...row, enabled: !row.enabled })}
+        onAction={name => void action(name)}
+        onRefresh={() => void refresh().catch(fail)}
+        onRefreshQuota={() => void fetchQuota()}
+        onModelChange={model => { const next = { ...row }; if (model === undefined) delete next.model; else next.model = model; change(next) }}
+        onPersist={() => void persist()}
+        onDiscard={() => { dirtyRef.current = false; setDirty(false); setDraft(snapshot.rows[0]) }} />
+        : <p role="status" style={muted}>{t('loading')}</p>}
     </div>
   </section>
 }

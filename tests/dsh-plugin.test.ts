@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, decodeSnapshot, name, inject } from '../src/index.js'
-import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
+import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
 
 describe('DSH settings plugin', () => {
   const homes: string[] = []
@@ -35,6 +35,25 @@ describe('DSH settings plugin', () => {
     const catalog = await handler!(CATALOG_ENDPOINT, {}) as { ok: boolean; value: { groups: unknown[] } }
     expect(catalog.ok).toBe(true)
     expect(catalog.value.groups).toEqual([])
+  })
+
+  it('routes sign-in through the coalesced job and sign-out through the editor', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-signin-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const ctx = {
+      on: () => () => {},
+      effect: (fn: () => unknown) => fn(),
+      connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
+    }
+    await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
+    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const started = await handler(RUN_ENDPOINT, { action: 'sign-in' }) as { ok: boolean; value: { started?: boolean } }
+    expect(started.ok).toBe(true)
+    expect(started.value.started).toBe(true)
+    const signOut = await handler(RUN_ENDPOINT, { action: 'sign-out' }) as { ok: boolean }
+    expect(signOut.ok).toBe(false)
   })
 
   it('marks a configured executable pair as installed after validation', async () => {

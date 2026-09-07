@@ -1,4 +1,4 @@
-# Host-plane Antigravity ACP provider. Settings appear through settings.section.
+# Host-plane Antigravity ACP provider with shared Provider settings.
 - insert:
     - id: dsh-acp-antigravity
       name: '@deepseek-ai/dsh-acp-antigravity'
