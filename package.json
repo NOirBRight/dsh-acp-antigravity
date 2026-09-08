@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-acp-antigravity",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packageManager": "pnpm@10.33.0",
   "description": "Google Antigravity ACP provider for DeepSeek Harness",
   "repository": { "type": "git", "url": "https://github.com/NOirBRight/dsh-acp-antigravity.git" },
@@ -20,7 +20,7 @@
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json",
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && tsdown",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && tsdown && node scripts/check-client-bundle.mjs",
     "test": "vitest run && node --test scripts/build-ui-tool.test.mjs",
     "check": "pnpm run typecheck && pnpm run test && pnpm run build",
     "check:provider": "node scripts/check-provider.mjs"
