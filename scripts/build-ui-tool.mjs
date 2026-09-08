@@ -182,7 +182,7 @@ function main() {
   const provenance = {
     package: PKG_NAME,
     version: NATIVE_VERSION,
-    source: { repo: SOURCE_REPO, baseSHA: BASE_SHA, path: 'packages/client/ui-tool', resolved: source },
+    source: { repo: SOURCE_REPO, baseSHA: BASE_SHA, path: 'packages/client/ui-tool' },
     patch: { file: 'scripts/dsh-ui-tool-native-card.patch', sha256: sha256(PATCH_FILE) },
     builder: { file: 'scripts/build-ui-tool.mjs', sha256: sha256(fileURLToPath(import.meta.url)) },
     workspaceRewrite: { '@deepseek-ai/cordis': `workspace:^ -> ${CORDIS_PUBLIC}`, '@deepseek-ai/dsh-*': `workspace:^ -> ${DSH_PUBLIC}` },
