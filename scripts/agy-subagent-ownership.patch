@@ -1,0 +1,129 @@
+# OPT-IN patch: attach native trajectory ownership to live tool/text emissions.
+#
+# Target (pinned, verified byte-identical in archive and extraction):
+#   agy_acp_server_20260818_01_RC01
+#   google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py
+# Ownership-only: applies independently to stock (no dependency on the usage
+# patch, which stays deactivated for 3082). Adds modified ownership metadata
+# (_meta agy.trajectory) and nothing else: no counters, no behavior change.
+# Applies to the per-step live emissions in _stream_live_step: the announce
+# update, the announce start, the terminal progress, and the thought/message
+# chunk deltas. Each carries the emitting step trajectory linkage
+# (trajectory_id, parent_trajectory_id, depth) in the ACP-sanctioned _meta
+# bag under agy.trajectory, merged with any existing field_meta (MCP frame
+# data, security warnings) without mutating it. The two announce sites
+# (progress reconcile, start) additionally forward the authentic SDK tool
+# name as _meta agy.toolName = str(call.name): raw call.name only, never a
+# display-title/kind/args-derived guess; title, kind, locations, rawInput,
+# and MCP stream_meta entries are preserved untouched (spread is None-safe,
+# so a missing trajectory still forwards the name). Deliberately untouched:
+# error-flush, manage_task-kill closes, and the turn-end sweep close other
+# rows and have no step of their own; permission prompts, rejects, and
+# interaction dummy frames likewise carry no step; historical replay steps
+# (trajectory_pb2.Step) carry no per-step trajectory fields. Those paths
+# send no _meta and the client keeps prior grouping rather than guessing.
+# The start_subagent launch result carries no child trajectory id at this
+# layer, so no launch-to-child arrow is synthesized: child containers link
+# via parent_trajectory_id only. A launch row completion never implies
+# child success. Archive builds must regenerate matching checked-hash
+# Python 3.14 bytecode alongside server.py as build-agy-usage-runtime.py
+# describes (same mechanism, this patch only).
+--- server.py
++++ server.py
+@@ -262,6 +262,48 @@
+   step_str = task_id[len("task-"):]
+   return tool_call_id == step_str or tool_call_id.endswith(f":{step_str}")
+ 
++def _trajectory_meta(step):
++  """Builds the ACP _meta ownership bag from a live SDK step.
++
++  Projects the trajectory linkage the SDK assigns every step
++  (trajectory_id, parent_trajectory_id, depth) into the ACP-sanctioned
++  _meta extensibility bag under the agy.trajectory key, mirroring the
++  existing agy.security.warning key. Returns None when the step carries
++  no usable trajectory id; the caller then sends no _meta and the client
++  keeps the row ungrouped rather than guessing. Only emissions for the
++  step's own tool calls and its own text/thought deltas carry it: closes
++  for other rows (error flush, manage_task kills, turn-end sweep),
++  permission prompts, and historical replay have no step of their own
++  and stay absent, never misattributed.
++  """
++  trajectory = getattr(step, "trajectory_id", "") or ""
++  if not isinstance(trajectory, str) or not trajectory:
++    return None
++  meta = {"trajectoryId": trajectory}
++  parent = getattr(step, "parent_trajectory_id", "") or ""
++  if isinstance(parent, str) and parent:
++    meta["parentTrajectoryId"] = parent
++  depth = getattr(step, "depth", None)
++  if isinstance(depth, int) and not isinstance(depth, bool) and depth >= 0:
++    meta["depth"] = depth
++  return {"agy.trajectory": meta}
++
++
++def _with_trajectory_meta(step, field_meta):
++  """Merges live-step trajectory ownership into an ACP field_meta mapping.
++
++  Returns field_meta untouched when the step carries no usable trajectory
++  id. Otherwise returns a new dict combining the existing entries (MCP
++  frame data, security warnings) with agy.trajectory. The input mapping
++  is never mutated: mcp_frames entries are shared across emissions.
++  """
++  owner = _trajectory_meta(step)
++  if owner is None:
++    return field_meta
++  merged = dict(field_meta) if isinstance(field_meta, dict) else {}
++  merged.update(owner)
++  return merged
++
+ 
+ def _run_command_proto_output(
+     run_command: cortex_pb2.CortexStepRunCommand,
+@@ -4587,6 +4629,7 @@
+                 content=schema.TextContentBlock(
+                     type="text", text=step.thinking_delta
+                 ),
++                field_meta=_with_trajectory_meta(step, None),
+             ),
+         )
+       if step.content_delta:
+@@ -4597,6 +4640,7 @@
+                 content=schema.TextContentBlock(
+                     type="text", text=step.content_delta
+                 ),
++                field_meta=_with_trajectory_meta(step, None),
+             ),
+         )
+ 
+@@ -4679,7 +4723,10 @@
+                   locations=stream_locations,
+                   status="in_progress",
+                   raw_input=stream_input,
+-                  field_meta=stream_meta,
++                  field_meta={
++                      **(_with_trajectory_meta(step, stream_meta) or {}),
++                      "agy.toolName": str(call.name),
++                  },
+               ),
+           )
+         else:
+@@ -4694,7 +4738,10 @@
+                   locations=stream_locations,
+                   raw_input=stream_input,
+                   status="in_progress",
+-                  field_meta=stream_meta,
++                  field_meta={
++                      **(_with_trajectory_meta(step, stream_meta) or {}),
++                      "agy.toolName": str(call.name),
++                  },
+               ),
+           )
+ 
+@@ -4823,6 +4867,7 @@
+                   raw_output=raw_output,
+                   content=content_blocks,
+                   status="failed" if is_error else "completed",
++                  field_meta=_with_trajectory_meta(step, None),
+               ),
+           )
+ 

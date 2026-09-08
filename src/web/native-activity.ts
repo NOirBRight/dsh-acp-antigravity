@@ -8,6 +8,8 @@
  */
 import {
   ANTIGRAVITY_SESSION_READY,
+  ANTIGRAVITY_AGENT_OBSERVED,
+  type AntigravityToolOwnership,
   ANTIGRAVITY_TOOL_START,
   foldAntigravityToolEvent,
   type AntigravityToolState,
@@ -15,6 +17,7 @@ import {
 import { ACP_SETTINGS_RPC_CHANNEL } from '../client-contract.js'
 import {
   ACTIVITY_ENDPOINT,
+  ANTIGRAVITY_FULL_ACCESS_AUTHORIZED,
   decodeActivityHistory,
   type AntigravityActivityRecord,
 } from '../activity-contract.js'
@@ -22,9 +25,33 @@ import {
 /** One folded row: stable key, display state, and last-event time. */
 export interface AntigravityToolRowData {
   readonly key: string
+  readonly epoch: number
   readonly state: AntigravityToolState
   readonly time: string
   readonly firstSeenAt: string
+}
+
+export interface AntigravityAgentData {
+  readonly key: string
+  readonly epoch: number
+  readonly firstSeenAt: string
+  readonly ownership: AntigravityToolOwnership
+}
+
+/** Fold first observations independently of tool launches, including zero-tool children.
+ * @param records - Decoded sidecar history in sequence order.
+ * @returns Agent observations scoped to native runtime epochs.
+ */
+export function foldAgentRecords(records: readonly AntigravityActivityRecord[]): AntigravityAgentData[] {
+  const agents = new Map<string, AntigravityAgentData>()
+  let epoch = 0
+  for (const record of records) {
+    if (record.type === ANTIGRAVITY_SESSION_READY) { epoch += 1; continue }
+    if (record.type !== ANTIGRAVITY_AGENT_OBSERVED) continue
+    const key = `${epoch}\n${record.data.trajectoryId}`
+    if (!agents.has(key)) agents.set(key, { key: String(record.seq), epoch, firstSeenAt: record.time, ownership: record.data })
+  }
+  return [...agents.values()]
 }
 
 /** Minimal RPC face the transcript container needs: logical-channel call with caller cancellation. */
@@ -44,7 +71,7 @@ export interface ActivityRpc {
  * @returns Display rows, oldest first, keyed by record seq.
  */
 export function foldActivityRecords(records: readonly AntigravityActivityRecord[]): readonly AntigravityToolRowData[] {
-  const rows: { key: string; state: AntigravityToolState; time: string; firstSeenAt: string }[] = []
+  const rows: { key: string; epoch: number; state: AntigravityToolState; time: string; firstSeenAt: string }[] = []
   const indexById = new Map<string, number>()
   let epoch = 0
   for (const record of records) {
@@ -52,10 +79,11 @@ export function foldActivityRecords(records: readonly AntigravityActivityRecord[
       epoch += 1
       continue
     }
+    if (record.type === ANTIGRAVITY_AGENT_OBSERVED || record.type === ANTIGRAVITY_FULL_ACCESS_AUTHORIZED) continue
     const id = String(epoch) + '\n' + record.data.toolId
     if (record.type === ANTIGRAVITY_TOOL_START) {
       indexById.set(id, rows.length)
-      rows.push({ key: String(record.seq), state: record.data, time: record.time, firstSeenAt: record.time })
+      rows.push({ key: String(record.seq), epoch, state: record.data, time: record.time, firstSeenAt: record.time })
       continue
     }
     const index = indexById.get(id)
@@ -63,6 +91,7 @@ export function foldActivityRecords(records: readonly AntigravityActivityRecord[
       indexById.set(id, rows.length)
       rows.push({
         key: String(record.seq),
+        epoch,
         state: foldAntigravityToolEvent(undefined, { type: record.type, data: record.data }),
         time: record.time,
         firstSeenAt: record.time,
@@ -74,7 +103,8 @@ export function foldActivityRecords(records: readonly AntigravityActivityRecord[
     current.state = foldAntigravityToolEvent(current.state, { type: record.type, data: record.data })
     current.time = record.time
   }
-  return rows
+  // Unowned pending previews remain in the approval UI until native execution supplies their placement.
+  return rows.filter(row => row.state.status !== 'pending' || row.state.ownership !== undefined)
 }
 
 /** Read one session history over RPC and fold it into rows.
@@ -83,12 +113,13 @@ export function foldActivityRecords(records: readonly AntigravityActivityRecord[
  * @param rpc - Logical-channel RPC face.
  * @param sessionId - DSH session scoping the sidecar read.
  * @param signal - Caller cancellation for a superseded session or unmount.
- * @returns Folded rows for this session only.
+ * @returns Folded tools and observed agents for this session only.
  */
-export async function loadActivityRows(rpc: ActivityRpc, sessionId: string, signal?: AbortSignal): Promise<readonly AntigravityToolRowData[]> {
+export async function loadActivityHistory(rpc: ActivityRpc, sessionId: string, signal?: AbortSignal): Promise<NativeHistorySnapshot> {
   const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, ACTIVITY_ENDPOINT, { sessionId }, signal)
   if (!result.ok) throw new Error(result.error?.message ?? 'Antigravity activity history is unavailable')
-  return foldActivityRecords(decodeActivityHistory(result.value).records)
+  const { records } = decodeActivityHistory(result.value)
+  return { rows: foldActivityRecords(records), agents: foldAgentRecords(records) }
 }
 
 /** Poll interval for the session-scoped native history subscription. */
@@ -97,6 +128,7 @@ export const NATIVE_HISTORY_POLL_MS = 1000
 /** Snapshot shared by every mounted turn container in one session. */
 export interface NativeHistorySnapshot {
   readonly rows: readonly AntigravityToolRowData[]
+  readonly agents: readonly AntigravityAgentData[]
   readonly error?: string
 }
 
@@ -122,7 +154,7 @@ function entryFor(rpc: ActivityRpc, sessionId: string): NativeHistoryEntry {
   }
   let entry = bySession.get(sessionId)
   if (entry === undefined) {
-    entry = { snapshot: { rows: [] }, listeners: new Set(), timer: undefined, controller: undefined }
+    entry = { snapshot: { rows: [], agents: [] }, listeners: new Set(), timer: undefined, controller: undefined }
     bySession.set(sessionId, entry)
   }
   return entry
@@ -137,13 +169,13 @@ async function pollNativeHistory(sessionId: string, entry: NativeHistoryEntry, r
   const controller = new AbortController()
   entry.controller = controller
   try {
-    const rows = await loadActivityRows(rpc, sessionId, controller.signal)
+    const snapshot = await loadActivityHistory(rpc, sessionId, controller.signal)
     if (entry.controller !== controller) return
-    entry.snapshot = { rows }
+    entry.snapshot = snapshot
   } catch (caught) {
     if (entry.controller !== controller) return
     const message = caught instanceof Error ? caught.message : 'Antigravity activity history is unavailable'
-    entry.snapshot = { rows: entry.snapshot.rows, error: message }
+    entry.snapshot = { ...entry.snapshot, error: message }
   } finally {
     if (entry.controller !== controller) return
     entry.controller = undefined
@@ -189,7 +221,7 @@ export function getNativeHistoryStore(rpc: ActivityRpc, sessionId: string): {
           if (entry.timer !== undefined) { clearTimeout(entry.timer); entry.timer = undefined }
           entry.controller?.abort()
           entry.controller = undefined
-          entry.snapshot = { rows: [] }
+          entry.snapshot = { rows: [], agents: [] }
         }
       }
     },

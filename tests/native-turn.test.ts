@@ -38,6 +38,7 @@ function context(state: AntigravityNativeTurn | undefined, startSeq: number) {
 function row(key: string, time: string): AntigravityToolRowData {
   return {
     key,
+    epoch: 1,
     state: { toolId: key, name: 'N', status: 'completed' },
     time,
     firstSeenAt: time,

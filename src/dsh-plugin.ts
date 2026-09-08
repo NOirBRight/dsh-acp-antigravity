@@ -3,6 +3,7 @@ import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { join } from 'node:path'
 import type { ActivityBindingHostContext } from './activity-binding.js'
+import { ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, nativeSessionBinding } from './activity-contract.js'
 import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
@@ -30,6 +31,7 @@ export interface DshPluginConfig {
 
 /** Host context used by the Settings RPC plugin. */
 export interface DshPluginContext extends ActivityBindingHostContext {
+  on: ActivityBindingHostContext['on'] & ((event: 'session/disposed', listener: (session: { readonly id: string }) => void | Promise<void>) => () => void)
   effect(fn: () => unknown, name?: string): void
   inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => void): void
   get?(name: string): unknown
@@ -151,27 +153,38 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   let installJob: Promise<void> | undefined
   let signingIn = false
   let signInJob: Promise<void> | undefined
-  const registry = new ExternalAgentProviderRegistry()
+  const registry = new ExternalAgentProviderRegistry({
+    auditFullAccess: entry => appendActivity(entry.session, [{ type: ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, data: entry }]),
+  })
+  let bridge: ReturnType<typeof createAntigravityLlmBridge> | undefined
+  let changing = false
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
   let models: { id: string; name: string }[] = []
   let quotaReader: AntigravityQuotaReader = createAntigravityQuotaReader(toProviderConfig(live), { getRuntimeVersion: () => installed?.provider.health.version })
 
   const mount = async (next: AcpAntigravitySettingsConfig): Promise<void> => {
-    await installed?.dispose()
+    if (changing) throw new Error('Antigravity configuration is changing')
+    changing = true
+    const previous = installed
     installed = undefined
-    authorizationUrl = undefined
-    live = next
-    quotaReader.invalidate()
-    quotaReader = createAntigravityQuotaReader(toProviderConfig(next), { getRuntimeVersion: () => installed?.provider.health.version })
-    installed = installAntigravityProvider(
-      { externalAgents: registry, settingsEditors: editors },
-      toProviderConfig(next),
-      { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => {
-        authorizationUrl = request.authorizationUrl
-        try { openDefaultBrowser(request.authorizationUrl) } catch { /* Settings still shows the URL if the desktop opener is missing. */ }
-      } },
-    )
+    try {
+      await bridge?.reset()
+      await previous?.dispose()
+      models = []
+      authorizationUrl = undefined
+      live = next
+      quotaReader.invalidate()
+      quotaReader = createAntigravityQuotaReader(toProviderConfig(next), { getRuntimeVersion: () => installed?.provider.health.version })
+      installed = installAntigravityProvider(
+        { externalAgents: registry, settingsEditors: editors },
+        toProviderConfig(next),
+        { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => {
+          authorizationUrl = request.authorizationUrl
+          try { openDefaultBrowser(request.authorizationUrl) } catch { /* Settings still shows the URL if the desktop opener is missing. */ }
+        } },
+      )
+    } finally { changing = false }
   }
 
   const snapshot = async (): Promise<AcpSettingsSnapshot> => {
@@ -206,7 +219,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   await mount(live)
   if (typeof ctx.inject === 'function') {
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
-      const adapter = createAntigravityLlmBridge(() => installed?.provider, () => models, next => { models = [...next] }, {
+      const adapter = createAntigravityLlmBridge({ registry, getProvider: () => changing || !live.enabled ? undefined : installed?.provider }, () => models, next => { models = [...next] }, {
         ask: async request => {
           const service = ctx.get?.('userQuestions') as { ask?: (payload: Record<string, unknown>) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
           if (service?.ask === undefined) return { answers: [] }
@@ -214,14 +227,24 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           const { sessionId: _ignored, ...rest } = request
           return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
-        appendSessionReady: sessionId => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }]) },
+        appendSessionReady: (sessionId, ref) => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity', ref } }]) },
+        loadSession: id => nativeSessionBinding(activity.read(id), id),
         appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendActivity(sessionId, events) },
         resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
         requestApproval: input => requestNativeApproval(ctx, input),
       })
-      scope.effect(() => scope.llm.registerAdapter(['antigravity'], adapter))
+      bridge = adapter
+      scope.effect(() => {
+        const unregister = scope.llm.registerAdapter(['antigravity'], adapter)
+        return async () => {
+          unregister()
+          if (bridge === adapter) bridge = undefined
+          await adapter.dispose()
+        }
+      })
     })
   }
+  ctx.on('session/disposed', session => bridge?.release(session.id))
   registerAcpSettingsRpc(ctx, {
     snapshot,
     quota: () => quotaReader.snapshot(),
@@ -241,6 +264,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       savePersistedConfig(home, next)
     },
     run: async (action, value, signal) => {
+      if (changing) throw new Error('Antigravity configuration is changing')
       if (installed === undefined) throw new Error('Antigravity provider is unavailable')
       const editor = editors.require(installed.provider.info.id, providerInstanceId(live.instanceId))
       if (action === 'refresh-models') {
@@ -296,14 +320,23 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       // Sign-in is handled above with a coalesced provider.signIn job; only sign-out reaches the editor here.
       if (action === 'sign-out') {
+        changing = true
         try {
+          await bridge?.reset()
           return await editor.run(action, signal)
         } finally {
+          models = []
+          changing = false
           quotaReader.invalidate()
         }
       }
       return editor.run(action, signal)
     },
   })
-  ctx.effect(() => () => { quotaReader.invalidate(); void installed?.dispose() }, 'dsh-acp-antigravity: provider')
+  ctx.effect(() => async () => {
+    changing = true
+    quotaReader.invalidate()
+    await bridge?.dispose()
+    await installed?.dispose()
+  }, 'dsh-acp-antigravity: provider')
 }

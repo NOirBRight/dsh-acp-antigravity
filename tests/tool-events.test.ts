@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { providerId } from '@deepseek-ai/dsh-acp-provider'
 import { createAntigravityLlmBridge } from '../src/llm-bridge.js'
+import { bridgeWithStubProvider, VALID_MODES, validListModel, validRef } from './bridge-fixtures.js'
 import {
+  ANTIGRAVITY_AGENT_OBSERVED,
   ANTIGRAVITY_TOOL_START,
   ANTIGRAVITY_TOOL_UPDATE,
   foldAntigravityToolEvent,
@@ -15,7 +17,7 @@ describe('ACP tool activity durable event family', () => {
     const output = JSON.stringify({ taskId: 'child-1', status: 'running' })
     const events = toDurableToolEvents({ toolId: 'spawn-1', name: 'spawn_task', status: 'completed', input, output }, new Set())
     const state = events.reduce(foldAntigravityToolEvent, undefined)
-    expect(state).toMatchObject({ input, output })
+    expect(state).toMatchObject({ name: 'spawn_task', input, output })
   })
 
   it('maps one native tool notification to replayable start/update with a stable id', () => {
@@ -43,12 +45,12 @@ describe('ACP tool activity durable event family', () => {
   it('adds a completion-only path to an existing tool row', () => {
     const seen = new Set<string>()
     const start = toDurableToolEvents({ toolId: 'tool-late', name: 'read', status: 'running' }, seen)
-    for (const event of start) seen.add(event.data.toolId)
+    for (const event of start) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
     const completed = toDurableToolEvents({
       toolId: 'tool-late', name: 'read', status: 'completed', output: '{\"workingDir\":\"/workspace/src\"}',
     }, seen)
     expect(completed).toEqual([
-      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-late', status: 'completed', output: '{"workingDir":"/workspace/src"}', location: { target: '/workspace/src', kind: 'file' } } },
+      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-late', name: 'read', status: 'completed', output: '{"workingDir":"/workspace/src"}', location: { target: '/workspace/src', kind: 'file' } } },
     ])
     expect([...start, ...completed].reduce(foldAntigravityToolEvent, undefined)).toMatchObject({ location: { target: '/workspace/src' } })
   })
@@ -66,7 +68,7 @@ describe('ACP tool activity durable event family', () => {
       input: '{\"url\":\"https://example.test/report\"}', output: '{\"combinedOutput\":\"opened\"}',
     }, new Set())
     expect(events).toEqual([
-      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'web-1', name: 'open url', input: '{"url":"https://example.test/report"}', status: 'completed', location: { target: 'https://example.test/report', kind: 'url' } } },
+      { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'web-1', name: 'open_url', input: '{"url":"https://example.test/report"}', status: 'completed', location: { target: 'https://example.test/report', kind: 'url' } } },
       { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'web-1', status: 'completed', output: 'opened' } },
     ])
   })
@@ -74,7 +76,7 @@ describe('ACP tool activity durable event family', () => {
   it('folds replayably without scanning the transcript window', () => {
     const seen = new Set<string>()
     const start = toDurableToolEvents({ toolId: 'tool-9', name: 'bash', status: 'running', input: 'ls' }, seen)
-    for (const event of start) seen.add(event.data.toolId)
+    for (const event of start) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
     const end = toDurableToolEvents({ toolId: 'tool-9', name: 'bash', status: 'failed', error: 'boom' }, seen)
     const viaReplace = [...start, ...end].reduce(foldAntigravityToolEvent, undefined)
     const tailOnly = [...end].reduce(foldAntigravityToolEvent, undefined)
@@ -86,13 +88,13 @@ describe('ACP tool activity durable event family', () => {
   it('appends ACP activity and native session readiness without a DSH tool-call or transcript dump', async () => {
     const appended: AntigravityToolEvent[] = []
     let sessionReady = 0
-    const adapter = createAntigravityLlmBridge(() => ({
+    const adapter = bridgeWithStubProvider({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
-      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      listModels: async () => [validListModel()],
       openSession: async () => ({
-        ref: {},
-        supportedModes: [],
+        ref: validRef(),
+        supportedModes: [...VALID_MODES],
         runTurn: async (_request: unknown, host: { publish: (event: Record<string, unknown>) => Promise<void> }) => {
           await host.publish({ type: 'tool-activity', toolId: 'tool-1', name: 'read', status: 'running', input: '{\"AbsolutePath\":\"/workspace/src/a.ts\"}' })
           await host.publish({ type: 'tool-activity', toolId: 'tool-1', name: 'read', status: 'completed', input: '{\"AbsolutePath\":\"/workspace/src/a.ts\"}', output: '{\"combinedOutput\":\"ok\"}' })
@@ -101,7 +103,7 @@ describe('ACP tool activity durable event family', () => {
         },
         dispose: async () => undefined,
       }),
-    }) as never, undefined, undefined, {
+    } as never, undefined, undefined, {
       appendSessionReady: () => { sessionReady += 1 },
       appendToolEvents: (_sessionId, events) => {
         for (const event of events) appended.push(event)
@@ -118,18 +120,18 @@ describe('ACP tool activity durable event family', () => {
     expect(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')).toBe('done')
     expect(appended).toEqual([
       { type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'read', input: '{"AbsolutePath":"/workspace/src/a.ts"}', status: 'running', location: { target: '/workspace/src/a.ts', kind: 'file' } } },
-      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-1', input: '{"AbsolutePath":"/workspace/src/a.ts"}', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' }, output: 'ok' } },
+      { type: ANTIGRAVITY_TOOL_UPDATE, data: { toolId: 'tool-1', name: 'read', input: '{"AbsolutePath":"/workspace/src/a.ts"}', status: 'completed', location: { target: '/workspace/src/a.ts', kind: 'file' }, output: 'ok' } },
     ])
   })
 
   it('rejects with the startup error instead of appending readiness', async () => {
     let sessionReady = 0
-    const adapter = createAntigravityLlmBridge(() => ({
+    const adapter = bridgeWithStubProvider({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
-      listModels: async () => [{ id: 'gemini', name: 'Gemini' }],
+      listModels: async () => [validListModel()],
       openSession: async () => { throw new Error('startup failed') },
-    }) as never, undefined, undefined, {
+    } as never, undefined, undefined, {
       appendSessionReady: () => { sessionReady += 1 },
     })
 

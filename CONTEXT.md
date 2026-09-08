@@ -18,6 +18,14 @@ _Avoid_: Provider (overloaded with DSH route keys), Plugin
 The foreign runtime owns the turn, tools, and subprocess (ACP). Used only when there is no LLM route, or that LLM route is retired (Cursor Agent replaces Cursor LLM).
 _Avoid_: External Agent as a Settings tab name, Wrapper, Proxy
 
+**Native turn**:
+One prompt and its resulting native execution, with a completed, cancelled, or failed outcome. An approved DSH plan can continue as another native turn.
+_Avoid_: Token request, DSH turn
+
+**Native binding**:
+The association between a DSH conversation and its native conversation. Its resume cursor identifies the native context; a ready record alone does not guarantee that context can be resumed.
+_Avoid_: Ready flag, cached connection
+
 **Runtime**:
 Which of LLM route or native agent is running this DSH session. Shown as a group icon in Model Switch, not a third sidebar.
 _Avoid_: Provider, Engine, Backend

@@ -19,7 +19,19 @@ describe('Antigravity catalog collapse', () => {
     expect(flash?.name).toBe('Gemini 3.8 Flash')
     expect(flash?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium', 'low'])
     expect(flash?.reasoning?.defaultEffort).toBe('high')
-    expect(collapsed.find(model => model.id === 'gemini-pro-agent')?.reasoning).toBeUndefined()
+    expect(collapsed.find(model => model.id === 'gemini-pro-agent')?.name).toBe('Gemini 3.1 Pro')
+    expect(collapsed.find(model => model.id === 'gemini-pro-agent')?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high'])
+  })
+
+  it('merges a High display-name alias with the unsuffixed Pro row', () => {
+    const collapsed = collapseAntigravityModels([
+      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro' },
+      { id: 'gemini-pro-agent', name: 'Gemini 3.1 Pro (High)' },
+    ])
+    expect(collapsed.map(model => model.id)).toEqual(['gemini-3.1-pro'])
+    expect(collapsed[0]?.name).toBe('Gemini 3.1 Pro')
+    expect(collapsed[0]?.reasoning?.efforts.map(effort => effort.id)).toEqual(['default', 'high'])
+    expect(collapsed[0]?.reasoning?.defaultEffort).toBe('high')
   })
 
   it('maps logical id plus effort back to the native ACP id', () => {
@@ -27,5 +39,10 @@ describe('Antigravity catalog collapse', () => {
     expect(nativeAntigravityModelId('gemini-3.8-flash', 'medium', native)).toBe('gemini-3.8-flash-medium')
     expect(nativeAntigravityModelId('gemini-3.8-flash', undefined, native)).toBe('gemini-3.8-flash-high')
     expect(nativeAntigravityModelId('gemini-pro-agent', 'high', native)).toBe('gemini-pro-agent')
+    expect(nativeAntigravityModelId('gemini-3.1-pro', 'high', ['gemini-3.1-pro', 'gemini-pro-agent'], [
+      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro' },
+      { id: 'gemini-pro-agent', name: 'Gemini 3.1 Pro (High)' },
+    ])).toBe('gemini-pro-agent')
+    expect(nativeAntigravityModelId('gemini-3.1-pro', 'default', ['gemini-3.1-pro', 'gemini-pro-agent'])).toBe('gemini-3.1-pro')
   })
 })

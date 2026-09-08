@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_BINDING_REJECTED,
   ACTIVITY_BINDING_UNAVAILABLE,
+  ACTIVITY_HISTORY_LOCKED,
   ACTIVITY_NATIVE_PROVIDER,
   installActivityBindingGuard,
   type ActivityBindingHostContext,
@@ -28,8 +29,20 @@ function pathFor(root: string, sessionId: string): string {
 }
 
 /** Loop-built conversation request: stamped by the real marker, as buildRequest does. */
-function loopRequest(sessionId: string, provider: string): GenerateOptions {
-  return markAgentLoopRequest({ provider, model: 'model', messages: [], sessionId: SessionId(sessionId) })
+function loopRequest(
+  sessionId: string,
+  provider: string,
+  messages: GenerateOptions['messages'] = [],
+): GenerateOptions {
+  return markAgentLoopRequest({ provider, model: 'model', messages, sessionId: SessionId(sessionId) })
+}
+
+function assistantTurn(): GenerateOptions['messages'] {
+  return [
+    { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } },
+    { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hello' }], source: { kind: 'model', provider: 'deepseek', model: 'chat' } },
+    { id: 'u2', role: 'user', content: [{ type: 'text', text: 'again' }], source: { kind: 'user' } },
+  ] as GenerateOptions['messages']
 }
 
 async function collect(stream: AsyncIterable<StreamChunk>): Promise<unknown[]> {
@@ -123,6 +136,33 @@ describe('installActivityBindingGuard', () => {
     const driver = drive(new AntigravityActivityStore(root), loopRequest('missing', 'deepseek'))
     await expect(collect(driver.run())).resolves.toEqual([])
     expect(driver.nextCalls).toBe(1)
+  })
+
+  it('allows a blank session first native turn', async () => {
+    const driver = drive(
+      new AntigravityActivityStore(tempRoot()),
+      loopRequest('blank', ACTIVITY_NATIVE_PROVIDER, [
+        { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } as GenerateOptions['messages'][number],
+      ]),
+    )
+    await expect(collect(driver.run())).resolves.toEqual([])
+    expect(driver.nextCalls).toBe(1)
+  })
+
+  it('rejects converting existing DSH history onto Antigravity', () => {
+    const driver = drive(
+      new AntigravityActivityStore(tempRoot()),
+      loopRequest('old', ACTIVITY_NATIVE_PROVIDER, assistantTurn()),
+    )
+    let failure: unknown
+    try {
+      driver.run()
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(LlmError)
+    expect((failure as LlmError).code).toBe(ACTIVITY_HISTORY_LOCKED)
+    expect(driver.nextCalls).toBe(0)
   })
 
   it('exempts unmarked helper and hand-built requests without reading the store', async () => {

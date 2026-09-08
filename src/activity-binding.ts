@@ -1,8 +1,9 @@
-/** Reject bound-session provider changes and unreadable bindings at model execution.
- * History reads, maintenance requests, and unbound sessions remain independent.
+/** Reject bound-session provider changes, unreadable bindings, and External Agent
+ * conversion of existing DSH history at model execution.
+ * History reads, maintenance requests, and blank unbound sessions remain independent.
  */
 import { LlmError, isAgentLoopRequest, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { ANTIGRAVITY_SESSION_READY } from './tool-events.js'
+import { nativeSessionBinding } from './activity-contract.js'
 import type { AntigravityActivityStore } from './activity-store.js'
 
 /** Provider route the native adapter registers. */
@@ -10,6 +11,9 @@ export const ACTIVITY_NATIVE_PROVIDER = 'antigravity'
 
 /** Machine code for a bound session routed to another provider. Outside the default retryable set, so the failure stays terminal. */
 export const ACTIVITY_BINDING_REJECTED = 'ACTIVITY_BINDING_REJECTED'
+
+/** Machine code for converting an existing DSH conversation onto Antigravity. Terminal. */
+export const ACTIVITY_HISTORY_LOCKED = 'ACTIVITY_HISTORY_LOCKED'
 
 /** Machine code for an unreadable sidecar. Fail closed for execution, never for history. */
 export const ACTIVITY_BINDING_UNAVAILABLE = 'ACTIVITY_BINDING_UNAVAILABLE'
@@ -45,18 +49,29 @@ function decideActivityBinding(
   if (sessionId === undefined) return next()
   let bound: boolean
   try {
-    // Same rule as the activity/binding RPC: a ready record binds the session.
-    bound = store.read(sessionId).records.some(record => record.type === ANTIGRAVITY_SESSION_READY)
+    bound = nativeSessionBinding(store.read(sessionId), sessionId) !== undefined
   } catch {
     throw new LlmError(
       'Antigravity activity data is unavailable; execution is blocked until it can be read.',
       ACTIVITY_BINDING_UNAVAILABLE,
     )
   }
-  if (!bound) return next()
+  if (!bound) {
+    if (options.provider === ACTIVITY_NATIVE_PROVIDER && hasPriorModelTurn(options.messages)) {
+      throw new LlmError(
+        'This conversation already has DSH history; start a new session to use Antigravity.',
+        ACTIVITY_HISTORY_LOCKED,
+      )
+    }
+    return next()
+  }
   if (options.provider === ACTIVITY_NATIVE_PROVIDER) return next()
   throw new LlmError(
     'Antigravity-bound session is routed to provider "' + options.provider + '"; execution is blocked.',
     ACTIVITY_BINDING_REJECTED,
   )
+}
+
+function hasPriorModelTurn(messages: GenerateOptions['messages']): boolean {
+  return messages.some(message => message.role === 'assistant')
 }

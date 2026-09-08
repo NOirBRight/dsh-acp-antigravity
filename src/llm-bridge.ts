@@ -1,19 +1,24 @@
 /** Plugin LLM adapter: same picker/turn seams as other providers, ACP behind stream(). */
 import {
   createExternalAgentTurnHost,
+  ExternalAgentTurnRunner,
+  type ExternalAgentProviderRegistry,
   createSessionModelRoute,
   sessionId,
   turnId,
   type ExternalAgentPermissionDecision,
   type ExternalAgentPermissionRequest,
   type ExternalAgentProvider,
-  type ExternalAgentSession,
+  type ExternalAgentSessionRef,
+  type ExternalAgentTurnResult,
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
-import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { StreamChunk, TokenUsage, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
 import { isRecord } from './decode.js'
-import { toDurableToolEvents, type AntigravityToolEvent } from './tool-events.js'
+import { reportedUsage, sumTurnUsage } from './usage.js'
+import { GenerationTimer } from './generation-timer.js'
+import { ANTIGRAVITY_AGENT_OBSERVED, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
 
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
@@ -33,7 +38,8 @@ export interface BridgeAskRequest {
 
 export interface BridgeHost {
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
-  appendSessionReady?(sessionId: string | undefined): void
+  appendSessionReady?(sessionId: string | undefined, ref: ExternalAgentSessionRef): void
+  loadSession?(sessionId: string): ExternalAgentSessionRef | undefined
   appendToolEvents?(sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void
   /**
    * Resolve the authoritative sandbox policy for one stream call. The host reads
@@ -107,21 +113,6 @@ function formatPlanUpdate(event: { summary: string; steps: readonly string[] }):
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10)
 }
 
-/**
- * Accept only fully known provider-reported usage. Both counters must be finite
- * nonnegative integers, matching official TokenUsage: the token-meter fold does
- * unguarded outputTokens arithmetic, so a partial sample would poison totals
- * with NaN. Anything else is omitted, never zero-filled.
- */
-function reportedUsage(inputTokens: unknown, outputTokens: unknown): TokenUsage | undefined {
-  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) return undefined
-  return { inputTokens, outputTokens }
-}
-
-function isTokenCount(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-}
-
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) return value.map(textOf).filter(part => part.length > 0).join(String.fromCharCode(10))
@@ -141,26 +132,37 @@ type StreamOptions = {
   reasoningEffort?: string
 }
 
-type Chunk = { type: string; [key: string]: unknown }
+type Chunk = StreamChunk
 
 export function createAntigravityLlmBridge(
-  getProvider: () => ExternalAgentProvider | undefined,
+  runtime: { readonly registry: ExternalAgentProviderRegistry; readonly getProvider: () => ExternalAgentProvider | undefined },
   getCachedModels?: () => readonly { id: string; name: string }[],
   setCachedModels?: (models: readonly { id: string; name: string }[]) => void,
   hostAsk?: BridgeHost,
 ): {
   providerInfo(provider: string): { id: string; name: string }
-  providerRetryPolicy(_provider: string): undefined
+  providerRetryPolicy(_provider: string): ResolvedRetryPolicy
   imageRequestPricing(_provider: string, _model: string): undefined
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
   resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<{ provider: string; id: string; name: string }>
   prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: { provider: string; id: string; name: string }; stream: (options: StreamOptions) => AsyncIterable<Chunk> }>
   stream(options: StreamOptions): AsyncIterable<Chunk>
+  reset(): Promise<void>
+  release(session: string): Promise<void>
+  dispose(): Promise<void>
 } {
-  const sessions = new Map<string, ExternalAgentSession>()
+  const { getProvider } = runtime
   const emittedToolIds = new Map<string, Set<string>>()
-  let anonymousSessions = 0
+  const observedAgentTrajectories = new Map<string, Set<string>>()
   let turns = 0
+  const runner = new ExternalAgentTurnRunner(runtime.registry, {
+    loadSession: id => hostAsk?.loadSession?.(id),
+    saveSession: ref => {
+      hostAsk?.appendSessionReady?.(ref.session, ref)
+      emittedToolIds.delete(ref.session)
+      observedAgentTrajectories.delete(ref.session)
+    },
+  })
   async function nativeModels(): Promise<readonly { id: string; name: string }[]> {
     const cached = getCachedModels?.() ?? []
     if (cached.length > 0) return cached
@@ -176,8 +178,12 @@ export function createAntigravityLlmBridge(
     }
   }
   return {
+    async reset() { await runner.reset(); emittedToolIds.clear(); observedAgentTrajectories.clear() },
+    async release(id) { await runner.release(sessionId(id)); emittedToolIds.delete(id); observedAgentTrajectories.delete(id) },
+    async dispose() { await runner.dispose(); emittedToolIds.clear(); observedAgentTrajectories.clear() },
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
-    providerRetryPolicy: () => undefined,
+    // Native prompts can already have executed tools before a transport failure.
+    providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 0, retryableCodes: [], initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 }),
     imageRequestPricing: () => undefined,
     listModels: async provider => {
       const native = await nativeModels()
@@ -190,47 +196,43 @@ export function createAntigravityLlmBridge(
       return { provider, ...found }
     },
     async prepareCall(provider, model, signal) {
+      const selected = getProvider()
+      const resolved = await this.resolveModel(provider, model, signal)
+      if (getProvider() !== selected) throw new Error('Antigravity configuration changed while preparing the turn')
       return {
-        model: await this.resolveModel(provider, model, signal),
-        stream: options => this.stream(options),
+        model: resolved,
+        stream: options => {
+          if (getProvider() !== selected) throw new Error('Antigravity configuration changed before dispatch')
+          return this.stream(options)
+        },
       }
     },
     stream: async function* (options) {
       const installed = getProvider()
       if (installed === undefined) throw new Error('Antigravity is not configured')
-      const key = options.sessionId ?? 'anonymous-' + String(++anonymousSessions)
+      if (options.sessionId === undefined) throw new Error('Native turns require an explicit DSH session id')
+      const key = options.sessionId
+      const controller = new AbortController()
+      const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal])
       const policy = hostAsk?.resolvePolicy?.(options.sessionId)
       const permissionMode = policy?.mode === 'danger-full-access' ? 'full-access' : policy?.mode === 'workspace-write' ? 'auto-accept-edits' : 'approval-required'
-      const openMode = permissionMode === 'full-access' ? 'auto-accept-edits' : permissionMode
       const natives = await nativeModels()
-      const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id))
+      const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id), natives)
       const workspaceRoot = policy?.workspaceRoot
-      let session = sessions.get(key)
-      if (session === undefined) {
-        const opened = await installed.openSession({
-          route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
-          session: sessionId(key),
-          permissionMode: openMode,
-          ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-          ...(options.signal === undefined ? {} : { signal: options.signal }),
-        })
-        try {
-          hostAsk?.appendSessionReady?.(options.sessionId)
-        } catch (error) {
-          try {
-            await opened.dispose()
-          } catch {
-            // Preserve storage failure if cleanup also fails.
-          }
-          throw error
-        }
-        session = opened
-        sessions.set(key, session)
-      }
-      const configurable = session as typeof session & { configure?: (model: string, mode: typeof permissionMode, signal?: AbortSignal) => Promise<void> }
-      if (typeof configurable.configure === 'function') await configurable.configure(nativeModel, permissionMode, options.signal)
-      type Pending = { kind: 'thought' | 'text'; text: string } | { kind: 'usage'; usage: TokenUsage }
+      if (getProvider() !== installed) throw new Error('Antigravity configuration changed before native execution')
+      const openRequest = {
+        route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
+        session: sessionId(key),
+        permissionMode,
+        fullAccessConfirmed: permissionMode === 'full-access',
+        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+        signal,
+      } as const
+      type Pending = { kind: 'thought' | 'text'; text: string }
       const pending: Pending[] = []
+      const timer = new GenerationTimer()
+      let latestUsage: TokenUsage | undefined
+      let multipleNativeTurns = false
       let sawPlan = false
       let wake: (() => void) | undefined
       const push = (kind: 'thought' | 'text', text: string): void => {
@@ -238,10 +240,22 @@ export function createAntigravityLlmBridge(
         pending.push({ kind, text })
         wake?.()
       }
-      const turnHost = createExternalAgentTurnHost(options.signal ?? new AbortController().signal, {
+      // Disclose a child trajectory once per native session from its first owned
+      // text/thought linkage. Scoped like emittedToolIds and reset on native open,
+      // so a restarted native session discloses its trajectories again. No text stored.
+      const observeAgent = (carrier: AntigravityOwnedEvent): void => {
+        const seen = observedAgentTrajectories.get(key) ?? new Set<string>()
+        observedAgentTrajectories.set(key, seen)
+        const events = toDurableAgentEvents(carrier.ownership, seen)
+        if (events.length === 0) return
+        for (const event of events) if (event.type === ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.trajectoryId)
+        hostAsk?.appendToolEvents?.(options.sessionId, events)
+      }
+      const turnHost = createExternalAgentTurnHost(signal, {
         publish: event => {
-          if (event.type === 'thought-delta') push('thought', event.text)
-          else if (event.type === 'assistant-delta') push('text', event.text)
+          timer.observe(event, performance.now())
+          if (event.type === 'thought-delta') { push('thought', event.text); observeAgent(event) }
+          else if (event.type === 'assistant-delta') { push('text', event.text); observeAgent(event) }
           else if (event.type === 'tool-activity') {
             const seen = emittedToolIds.get(key) ?? new Set<string>()
             emittedToolIds.set(key, seen)
@@ -253,19 +267,12 @@ export function createAntigravityLlmBridge(
             sawPlan = true
             push('text', formatPlanUpdate(event))
           } else if (event.type === 'usage') {
-            // Forward provider-reported totals verbatim. The ACP contract defines
-            // no delta semantics, so samples pass through in order and the harness
-            // (last-wins per step) decides; never sum, estimate, or zero-fill here.
-            // Partial or invalid samples are dropped: no complete pair, no chunk.
-            const usage = reportedUsage(event.inputTokens, event.outputTokens)
-            if (usage !== undefined) {
-              pending.push({ kind: 'usage', usage })
-              wake?.()
-            }
+            // Native updates are cumulative within a prompt; only its last valid snapshot is counted.
+            latestUsage = reportedUsage(event) ?? latestUsage
           }
         },
-        requestPermission: request => decidePermission(request, permissionMode, hostAsk, options.signal, options.sessionId),
-        requestUserInput: request => decideUserInput(request, hostAsk, options.signal, options.sessionId),
+        requestPermission: request => decidePermission(request, permissionMode, hostAsk, signal, options.sessionId),
+        requestUserInput: request => decideUserInput(request, hostAsk, signal, options.sessionId),
       })
       const prompt = acpPrompt(options.messages)
       async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
@@ -277,10 +284,6 @@ export function createAntigravityLlmBridge(
           }
           const item = pending.shift()
           if (item === undefined) break
-          if (item.kind === 'usage') {
-            yield { type: 'usage', usage: item.usage }
-            continue
-          }
           if (item.kind === 'thought') {
             if (!thoughtOpen) {
               yield { type: 'block-start', index: 0, blockType: 'reasoning' }
@@ -300,40 +303,57 @@ export function createAntigravityLlmBridge(
         await running
         return { thought, text, thoughtOpen, textOpen }
       }
-      const first = session.runTurn({
-        turn: turnId('t' + String(++turns)),
-        prompt,
-        permissionMode,
-        signal: options.signal ?? new AbortController().signal,
-      }, turnHost)
-      let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
-      const result = await first
-      let assembled = state.text.length > 0 ? state.text : result.text
-      if (inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
-        let approved = false
-        try {
-          approved = await reviewPlan(assembled, hostAsk, options.signal, options.sessionId)
-        } catch {
-          approved = false
-        }
-        if (approved) {
-          const second = session.runTurn({
-            turn: turnId('t' + String(++turns)),
-            prompt: 'The user approved the plan. Carry it out now.',
-            permissionMode,
-            signal: options.signal ?? new AbortController().signal,
-          }, turnHost)
-          state = yield* drain(second, state)
-          const next = await second
-          assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
-        }
+      let active: Promise<ExternalAgentTurnResult> | undefined
+      const run = (text: string): Promise<ExternalAgentTurnResult> => {
+        active = runner.runTurn(openRequest, { turn: turnId('t' + String(++turns)), prompt: text, permissionMode, signal }, turnHost)
+        return active
       }
-      if (state.thoughtOpen) yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: state.thought } }
-      if (state.textOpen || assembled.length > 0) {
-        if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
-        yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
+      try {
+        const first = run(prompt)
+        let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
+        const result = await first
+        let finalStatus = result.status
+        let finalError = result.error
+        let finalUsage = result.status === 'completed' ? latestUsage : undefined
+        let assembled = state.text.length > 0 ? state.text : result.text
+        if (result.status === 'completed' && inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
+          let approved = false
+          try {
+            approved = await reviewPlan(assembled, hostAsk, signal, options.sessionId)
+          } catch {
+            approved = false
+          }
+          if (approved) {
+            multipleNativeTurns = true
+            latestUsage = undefined
+            const second = run('The user approved the plan. Carry it out now.')
+            state = yield* drain(second, state)
+            const next = await second
+            finalStatus = next.status
+            finalError = next.error
+            finalUsage = next.status === 'completed' ? sumTurnUsage(finalUsage, latestUsage) : undefined
+            assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
+          }
+        }
+        if (state.thoughtOpen) yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: state.thought } }
+        if (state.textOpen || assembled.length > 0) {
+          if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
+          yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
+        }
+        if (finalUsage !== undefined) {
+          const usage = { ...finalUsage, generationElapsedMs: multipleNativeTurns ? null : timer.elapsedMs() }
+          yield { type: 'usage', usage }
+        }
+        yield { type: 'finish', reason: finalStatus === 'cancelled'
+          ? { kind: 'aborted', failure: { code: 'ABORTED', message: 'Native turn cancelled' } }
+          : finalStatus === 'failed'
+            ? { kind: 'error', failure: { code: 'NATIVE_TURN_FAILED', message: finalError ?? 'Native turn failed' } }
+            : { kind: 'stop' } }
+      } finally {
+        controller.abort()
+        turnHost.expire()
+        await active?.catch(() => undefined) // The stream already reports the execution error.
       }
-      yield { type: 'finish', reason: result.status === 'cancelled' ? 'aborted' : 'stop' }
     },
   }
 }

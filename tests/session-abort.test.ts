@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { TurnAbortedError, optionId, providerId, providerInstanceId, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import { AntigravitySession } from '../src/index.js'
+import { antigravitySessionScope } from '../src/cursor.js'
 import type { AcpConnection, AcpNotificationHandler, AcpRequestHandler } from '../src/protocol.js'
 
 function chunk(text: string): unknown {
@@ -48,12 +49,14 @@ class PromptConnection extends RacingConnection {
 }
 
 function openSession(connection: AcpConnection): AntigravitySession {
+  const config = { executablePath: '/opt/agy/agy_acp_server', harnessPath: '/opt/agy/localharness_external', stateDirectory: '/tmp/dsh-qa', instanceId: providerInstanceId('qa'), platform: 'linux' as const }
   return new AntigravitySession(
     connection,
     providerId('antigravity'),
     sessionId('qa-session'),
     'native-1',
-    { executablePath: '/opt/agy/agy_acp_server', harnessPath: '/opt/agy/localharness_external', stateDirectory: '/tmp/dsh-qa', instanceId: providerInstanceId('qa'), platform: 'linux' },
+    config,
+    antigravitySessionScope(config, '/workspace'),
   )
 }
 

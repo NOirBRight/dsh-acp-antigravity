@@ -1,11 +1,15 @@
 /** Browser-safe activity DTOs, endpoints, and decoders shared by the store and the settings RPC. */
+import { providerId, sessionId, type ExternalAgentSessionRef, type ExternalAgentFullAccessAudit } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import {
+  ANTIGRAVITY_AGENT_OBSERVED,
   ANTIGRAVITY_SESSION_READY,
   ANTIGRAVITY_TOOL_START,
   ANTIGRAVITY_TOOL_UPDATE,
   type AntigravitySessionReadyData,
   type AntigravityToolLocation,
+  isToolOwnership,
+  type AntigravityToolOwnership,
   type AntigravityToolStartData,
   type AntigravityToolUpdateData,
 } from './tool-events.js'
@@ -19,16 +23,38 @@ export const ACTIVITY_BINDING_ENDPOINT = 'activity/binding'
 /** Schema version written on every history line and returned by reads. */
 export const ACTIVITY_SCHEMA_VERSION = 1
 
+/** Value-free authorization recorded before native full-access execution. */
+export const ANTIGRAVITY_FULL_ACCESS_AUTHORIZED = 'antigravity/full-access-authorized' as const
+export type AntigravityFullAccessEvent = { readonly type: typeof ANTIGRAVITY_FULL_ACCESS_AUTHORIZED; readonly data: ExternalAgentFullAccessAudit }
+
 /** One persisted history line with replay order and wall-clock time. */
 export type AntigravityActivityRecord =
+  | ({ readonly seq: number; readonly time: string } & AntigravityFullAccessEvent)
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_SESSION_READY; readonly data: AntigravitySessionReadyData }
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_TOOL_START; readonly data: AntigravityToolStartData }
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_TOOL_UPDATE; readonly data: AntigravityToolUpdateData }
+  | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_AGENT_OBSERVED; readonly data: AntigravityToolOwnership }
 
 /** History snapshot: schema version plus records in seq order. */
 export interface AntigravityActivityHistory {
   readonly version: number
   readonly records: readonly AntigravityActivityRecord[]
+}
+
+/** Read the latest native binding; legacy ready-only histories intentionally have no cursor.
+ * @param history - Validated sidecar history.
+ * @param id - DSH conversation owning the history.
+ * @returns Its native reference, or undefined for a conversation never opened natively.
+ */
+export function nativeSessionBinding(history: AntigravityActivityHistory, id: string): ExternalAgentSessionRef | undefined {
+  for (let index = history.records.length - 1; index >= 0; index--) {
+    const record = history.records[index]
+    if (record?.type !== ANTIGRAVITY_SESSION_READY) continue
+    const ref = record.data.ref ?? { provider: providerId('antigravity'), session: sessionId(id) }
+    if (ref.session !== id) throw corrupt('native binding belongs to another DSH session')
+    return ref
+  }
+  return undefined
 }
 
 /** Native binding for one session: the provider when a ready record exists, else null. */
@@ -90,14 +116,21 @@ function decodeRecordValue(value: unknown, seq: number): AntigravityActivityReco
   const time = value.time
   if (typeof time !== 'string' || Number.isNaN(Date.parse(time))) throw corrupt('line ' + String(seq) + ' has an invalid time')
   const type = value.type
+  if (type === ANTIGRAVITY_FULL_ACCESS_AUTHORIZED && isRecord(value.data) && stringValue(value.data.provider) !== undefined && stringValue(value.data.session) !== undefined && value.data.mode === 'full-access' && (value.data.auditId === undefined || stringValue(value.data.auditId) !== undefined)) return { seq, time, type, data: value.data as unknown as ExternalAgentFullAccessAudit }
   if (type === ANTIGRAVITY_SESSION_READY && isSessionReadyData(value.data)) return { seq, time, type, data: value.data }
   if (type === ANTIGRAVITY_TOOL_START && isToolStartData(value.data)) return { seq, time, type, data: value.data }
   if (type === ANTIGRAVITY_TOOL_UPDATE && isToolUpdateData(value.data)) return { seq, time, type, data: value.data }
+  if (type === ANTIGRAVITY_AGENT_OBSERVED && isToolOwnership(value.data)) return { seq, time, type, data: value.data }
   throw corrupt('line ' + String(seq) + ' has an unknown type or data')
 }
 
 function isSessionReadyData(value: unknown): value is AntigravitySessionReadyData {
-  return isRecord(value) && value.provider === 'antigravity'
+  if (!isRecord(value) || value.provider !== 'antigravity') return false
+  if (value.ref === undefined) return true
+  const ref = value.ref
+  if (!isRecord(ref) || stringValue(ref.provider) === undefined || stringValue(ref.session) === undefined || (ref.nativeSession !== undefined && stringValue(ref.nativeSession) === undefined)) return false
+  const cursor = ref.resumeCursor
+  return cursor === undefined || (isRecord(cursor) && cursor.provider === ref.provider && stringValue(cursor.value) !== undefined)
 }
 
 function isToolStatus(value: unknown): value is AntigravityToolStartData['status'] {
@@ -113,14 +146,17 @@ function isToolStartData(value: unknown): value is AntigravityToolStartData {
   if (stringValue(value.toolId) === undefined || stringValue(value.name) === undefined) return false
   if (!isToolStatus(value.status)) return false
   if (value.input !== undefined && typeof value.input !== 'string') return false
-  return value.location === undefined || isToolLocation(value.location)
+  if (value.location !== undefined && !isToolLocation(value.location)) return false
+  return value.ownership === undefined || isToolOwnership(value.ownership)
 }
 
 function isToolUpdateData(value: unknown): value is AntigravityToolUpdateData {
   if (!isRecord(value)) return false
   if (stringValue(value.toolId) === undefined || !isToolStatus(value.status)) return false
+  if (value.name !== undefined && stringValue(value.name) === undefined) return false
   if (value.input !== undefined && typeof value.input !== 'string') return false
   if (value.location !== undefined && !isToolLocation(value.location)) return false
   if (value.output !== undefined && typeof value.output !== 'string') return false
-  return value.error === undefined || typeof value.error === 'string'
+  if (value.error !== undefined && typeof value.error !== 'string') return false
+  return value.ownership === undefined || isToolOwnership(value.ownership)
 }

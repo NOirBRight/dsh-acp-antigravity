@@ -82,13 +82,9 @@ function permissionReason(toolCall: Record<string, unknown>, toolName: string): 
 }
 
 function describeToolInput(value: unknown): string | undefined {
-  if (!isRecord(value)) return undefined
-  const parts: string[] = []
-  for (const key of ['path', 'file', 'command', 'query', 'url', 'glob', 'pattern', 'target', 'destination', 'old_path', 'new_path'] as const) {
-    const item = stringValue(value[key])?.trim()
-    if (item !== undefined && item !== '') parts.push(key + ': ' + item)
-  }
-  return parts.length === 0 ? undefined : parts.join(', ')
+  if (value === undefined) return undefined
+  if (!isRecord(value)) return JSON.stringify(value)
+  return Object.entries(value).map(([key, input]) => key + ': ' + (typeof input === 'string' ? input : JSON.stringify(input))).join(', ') || undefined
 }
 
 function describeLocations(value: unknown, already: string): string | undefined {

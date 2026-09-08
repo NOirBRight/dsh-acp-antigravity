@@ -9,17 +9,19 @@
  * marks rows outside its actual Core window as unattributed.
  */
 import React, { useMemo, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
-import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatNode, ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { getNativeHistoryStore, type ActivityRpc, type AntigravityToolRowData } from './native-activity.js'
 import { isOwnedByTurn, nextStartMs, rowsForTurnWindow, type TurnStart } from './native-turn.js'
-import { AntigravityToolNode } from './AntigravityToolNode.tsx'
+import { NativeActivityNode } from './NativeActivityNode.js'
+import { groupNativeActivity } from './native-tree.js'
 import type { AcpSettingsKey } from './locales.ts'
 
 export interface NativeTurnFace {
   t: (key: AcpSettingsKey) => string
+  conversationT: TranslateNS<'conversation'>
   rpc: ActivityRpc
   sessionId: SessionId
   uiConversation: UiConversation
@@ -69,18 +71,21 @@ export function NativeTurnContainer(props: { readonly node: ChatNode<'antigravit
     if (knownIndex < 0) return EMPTY_NATIVE_ROWS
     return rowsForTurnWindow(history.rows, startMs, followingStartMs, Date.now(), includeEarlier)
   }, [history.rows, startMs, followingStartMs, includeEarlier, knownIndex])
-  if (rows.length === 0 && history.error === undefined) return null
+  const branches = useMemo(() => groupNativeActivity(rows, knownIndex < 0 ? [] :
+    rowsForTurnWindow(history.agents, startMs, followingStartMs, Date.now(), includeEarlier)),
+  [rows, history.agents, knownIndex, startMs, followingStartMs, includeEarlier])
+  if (branches.length === 0 && history.error === undefined) return null
   const label = rows.length > 0
     ? props.t('activityTools').replace('{count}', String(rows.length))
     : undefined
   return <section data-antigravity-native-turn={turn} style={wrap}>
     {label === undefined ? null : <p style={head}>{label}</p>}
-    {rows.map(row => {
-      const ms = Date.parse(row.firstSeenAt)
+    {branches.map(branch => {
+      const ms = Date.parse(branch.kind === 'tool' ? branch.row.firstSeenAt : branch.firstSeenAt)
       const unattributed = !isOwnedByTurn(ms, startMs, endMs)
-      return <React.Fragment key={row.key}>
+      return <React.Fragment key={branch.key}>
         {unattributed ? <p data-native-unattributed style={head}>{props.t('activityBetweenTurns')}</p> : null}
-        <AntigravityToolNode row={row} t={props.t} />
+        <NativeActivityNode branch={branch} t={props.t} conversationT={props.conversationT} />
       </React.Fragment>
     })}
     {history.error === undefined ? null : <p role="alert" style={errorText}>{history.error}

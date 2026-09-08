@@ -109,7 +109,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node',
     key: 'antigravity-native',
-    inject: (sessionId: string) => ({ t, rpc, sessionId: sessionId as SessionId, uiConversation: ctx.uiConversation }),
+    inject: (sessionId: string) => ({ t, conversationT: ctx.locale.bind('conversation'), rpc, sessionId: sessionId as SessionId, uiConversation: ctx.uiConversation }),
   }, NativeTurnContainer))
   ctx.effect(() => {
     let warned = false

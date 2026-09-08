@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { apply, inject } from '../src/web/index.ts'
 import { nativeTurnDefinition } from '../src/web/native-turn.ts'
 
+// Registration is tested here; actual browser-only cards are exercised by the 3082 E2E.
+vi.mock('../src/web/NativeTurnContainer.tsx', () => ({ NativeTurnContainer: () => null }))
+
 type EntrySpec = {
   name?: unknown
   key?: unknown

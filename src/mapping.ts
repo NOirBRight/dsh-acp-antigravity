@@ -8,6 +8,8 @@ import {
   type ExternalAgentPermissionMode,
 } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
+import { toolOwnershipOf, withToolOwnership } from './tool-events.js'
+import { acpUsage } from './usage.js'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PERMISSION_MODES,
@@ -84,29 +86,32 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
   if (tag === 'agent_message_chunk' || tag === 'assistant_message_chunk') {
     const text = extractText(update.content)
     if (text === undefined) throw new Error('Antigravity message chunk has no text')
-    return boundExternalAgentEvent({ type: 'assistant-delta', text }, bounds)
+    return withToolOwnership(boundExternalAgentEvent({ type: 'assistant-delta', text }, bounds), toolOwnershipOf(update))
   }
   if (tag === 'agent_thought_chunk' || tag === 'thought_chunk') {
     const text = extractText(update.content)
     if (text === undefined) throw new Error('Antigravity thought chunk has no text')
-    return boundExternalAgentEvent({ type: 'thought-delta', text }, bounds)
+    return withToolOwnership(boundExternalAgentEvent({ type: 'thought-delta', text }, bounds), toolOwnershipOf(update))
   }
   if (tag === 'tool_call' || tag === 'tool_call_update') {
     const nativeToolId = stringValue(update.toolCallId) ?? stringValue(update.tool_call_id) ?? stringValue(update.id)
-    const name = stringValue(update.title) ?? stringValue(update.name) ?? 'native tool'
+    const meta = isRecord(update._meta) ? update._meta : undefined
+    const name = stringValue(meta?.['agy.toolName']) ?? stringValue(update.title) ?? stringValue(update.name)
     if (!nativeToolId) throw new Error('Antigravity tool update has no id')
     const status = normalizeToolStatus(update.status ?? update.state)
     const input = stringifyPayload(update.rawInput ?? update.input)
     const output = stringifyPayload(update.rawOutput ?? update.output ?? update.content)
     const error = stringValue(update.error)
     const locations = Array.isArray(update.locations) ? update.locations.map(normalizeToolLocation).filter(location => location !== undefined) : undefined
-    return boundExternalAgentEvent({
-      type: 'tool-activity', toolId: toolId(nativeToolId), name, status,
+    const ownership = toolOwnershipOf(update)
+    return withToolOwnership(boundExternalAgentEvent({
+      type: 'tool-activity', toolId: toolId(nativeToolId), name: name ?? 'native tool', status,
+      ...(name === undefined ? { nameMissing: true } : {}),
       ...(input === undefined ? {} : { input }),
       ...(output === undefined ? {} : { output }),
       ...(error === undefined ? {} : { error }),
       ...(locations === undefined ? {} : { locations }),
-    }, bounds)
+    }, bounds), ownership)
   }
   if (tag === 'plan' || tag === 'plan_update') {
     const entries = Array.isArray(update.entries) ? update.entries : Array.isArray(update.steps) ? update.steps : []
@@ -115,9 +120,8 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
     return boundExternalAgentEvent({ type: 'plan-update', summary, steps }, bounds)
   }
   if (tag === 'usage_update' || tag === 'usage') {
-    const inputTokens = numberValue(update.inputTokens ?? update.input_tokens)
-    const outputTokens = numberValue(update.outputTokens ?? update.output_tokens)
-    return { type: 'usage', ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }) }
+    const usage = acpUsage(update)
+    return usage === undefined ? null : { type: 'usage', ...usage }
   }
   if (tag === 'current_mode_update' || tag === 'config_option_update' || tag === 'session_info_update') return { type: 'notice', level: 'info', message: 'Antigravity session configuration updated' }
   if (tag === 'user_message_chunk') return null
@@ -143,8 +147,6 @@ function stringifyPayload(value: unknown): string | undefined {
   if (typeof value === 'string') return value
   try { return JSON.stringify(value) } catch { return '[unserializable payload]' }
 }
-
-function numberValue(value: unknown): number | undefined { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined }
 
 function normalizeToolStatus(value: unknown): 'pending' | 'running' | 'completed' | 'failed' {
   switch (value) {

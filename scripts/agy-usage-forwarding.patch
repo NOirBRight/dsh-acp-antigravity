@@ -1,0 +1,107 @@
+# OPT-IN patch: forward fully-known native token counters on PromptResponse.
+#
+# Target (pinned, verified byte-identical in archive and extraction):
+#   agy_acp_server_20260818_01_RC01
+#   google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py
+# Applies ONLY to the final prompt() return path. Early returns (logout,
+# cancelled, errors) intentionally omit partial telemetry: counters may be
+# incomplete there, and partial usage is never forwarded.
+# Archive builds must regenerate matching checked-hash Python 3.14 bytecode
+# alongside server.py and verify loading with the native executable.
+--- server.py
++++ server.py
+@@ -1345,6 +1345,82 @@
+   return "end_turn"
+ 
+ 
++_MAX_SAFE_INTEGER = 2**53 - 1
++
++
++def _prompt_token_usage(response):
++  """Builds schema.Usage from SDK UsageMetadata, or None when unusable.
++
++  Uses the module-global schema import. Mapping (ACP UNSTABLE
++  Usage): inputTokens takes prompt_token_count; outputTokens takes
++  candidates_token_count ONLY - thinking tokens are excluded from
++  outputTokens and ride thoughtTokens separately (thoughts_token_count),
++  so downstream can tell inclusive from exclusive totals by total equality.
++  totalTokens takes total_token_count. cachedReadTokens takes
++  cached_content_token_count when present; the SDK reports no cached-write
++  counter, so cachedWriteTokens is never set and no value is synthesized.
++  A field the SDK left as None is omitted (thoughts and cached only);
++  totals then validate against the matching convention (with or without
++  thoughts). Anything missing or invalid beyond that, a total matching
++  neither convention, or a cached count exceeding prompt input yields None
++  (absent), never zero-filled. Counters above 2**53 - 1 are rejected so
++  values stay lossless through JSON/JS. Zeros the backend explicitly
++  reported stay zeros.
++  """
++  if response is None:
++    return None
++  try:
++    usage = response.usage_metadata
++  except Exception:
++    return None
++  if usage is None:
++    return None
++  try:
++    prompt = usage.prompt_token_count
++    candidates = usage.candidates_token_count
++    thoughts = usage.thoughts_token_count
++    total = usage.total_token_count
++    cached = usage.cached_content_token_count
++  except Exception:
++    return None
++  for value in (prompt, candidates, total):
++    if not _is_usage_count(value):
++      return None
++  if thoughts is None:
++    if total != prompt + candidates:
++      return None
++  else:
++    if not _is_usage_count(thoughts):
++      return None
++    if total != prompt + candidates + thoughts:
++      return None
++  kwargs = {
++      "input_tokens": prompt,
++      "output_tokens": candidates,
++      "total_tokens": total,
++  }
++  if thoughts is not None:
++    kwargs["thought_tokens"] = thoughts
++  if cached is not None:
++    if not _is_usage_count(cached) or cached > prompt:
++      return None
++    kwargs["cached_read_tokens"] = cached
++  try:
++    return schema.Usage(**kwargs)
++  except Exception:
++    return None
++
++
++def _is_usage_count(value):
++  """True for a real counter: an integer, zero or more, never boolean,
++  within 2**53 - 1 so it survives JSON/JS number handling losslessly."""
++  return (
++      isinstance(value, int)
++      and not isinstance(value, bool)
++      and 0 <= value <= _MAX_SAFE_INTEGER
++  )
++
++
+ class AgyAdapter(Agent):
+ 
+   """Antigravity ACP Server Adapter."""
+@@ -4428,7 +4504,10 @@
+     if response:
+       stop_reason = _to_acp_stop_reason(getattr(response, "stop_reason", None))
+ 
+-    return schema.PromptResponse(stop_reason=stop_reason)
++    return schema.PromptResponse(
++        stop_reason=stop_reason,
++        usage=_prompt_token_usage(response) if unclosed_status == "completed" else None,
++    )
+ 
+   async def _send_connection_lost_message(
+       self, session_id: str, error: Exception

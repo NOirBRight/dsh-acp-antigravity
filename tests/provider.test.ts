@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { createAntigravityLlmBridge } from '../src/llm-bridge.js'
+import { zPromptResponse } from '@agentclientprotocol/sdk/dist/schema/zod.gen.js'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -27,6 +29,7 @@ import {
 } from '../src/index.js'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { spawnAntigravityAcp, type AcpConnection, type AcpRequestHandler, type AcpNotificationHandler } from '../src/protocol.js'
+import { antigravitySessionScope, encodeAntigravityCursor } from '../src/cursor.js'
 
 interface FakeConnectionOptions {
   readonly authenticationAvailable?: boolean
@@ -158,6 +161,8 @@ describe('Antigravity mapping and safety', () => {
     expect(reason).toBe('Antigravity requested permission: Read file · path: /workspace/src/a.ts')
     await handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'run_command', rawInput: { command: 'git status' } }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }] }, 2)
     expect(reason).toBe('Antigravity requested permission: run_command · command: git status')
+    await handler('session/request_permission', { sessionId: 'native', toolCall: { title: 'Preview label', rawInput: { CommandLine: 'printf ACTUAL', Cwd: '/workspace', Subagents: [{ Prompt: 'Reply EMPTY without tools' }] } }, options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }] }, 3)
+    expect(reason).toBe('Antigravity requested permission: Preview label · CommandLine: printf ACTUAL, Cwd: /workspace, Subagents: [{"Prompt":"Reply EMPTY without tools"}]')
   })
 
   it('normalizes interaction-prefixed permission IDs as user questions', async () => {
@@ -244,6 +249,24 @@ describe('Antigravity mapping and safety', () => {
 })
 
 describe('Antigravity provider lifecycle', () => {
+  it('retains final native usage through the session, bounded host and LLM bridge', async () => {
+    const provider = new AntigravityProvider(config(), {
+      cwd: '/workspace', launchSpec: async () => launchSpec(),
+      connectionFactory: () => new FakeConnection({ promptResponse: zPromptResponse.parse({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20, thoughtTokens: 30, totalTokens: 150, cachedReadTokens: 60 } }) }),
+    })
+    const registry = new ExternalAgentProviderRegistry()
+    const unregister = registry.register(provider)
+    const adapter = createAntigravityLlmBridge({ registry, getProvider: () => provider })
+    try {
+      const chunks = []
+      for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini-pro', sessionId: 'usage-bridge', messages: [{ role: 'user', source: { kind: 'user' }, content: 'hello' }] })) chunks.push(chunk)
+      expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([{ type: 'usage', usage: { inputTokens: 40, outputTokens: 50, reasoningTokens: 30, cacheReadTokens: 60, totalTokens: 150, generationElapsedMs: null } }])
+    } finally {
+      await adapter.dispose()
+      await unregister()
+    }
+  })
+
   it('discovers exact models and drives a native turn without duplicating tools', async () => {
     const connections: FakeConnection[] = []
     const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => { const connection = new FakeConnection(); connections.push(connection); return connection } })
@@ -285,8 +308,10 @@ describe('Antigravity provider lifecycle', () => {
 
   it('resumes with the persisted native ID and complete additional roots', async () => {
     const connection = new FakeConnection()
-    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
-    const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: resumeCursor('antigravity', 'native-old'), clientFilesystem: { ...clientFilesystem(), workspaceRoots: ['/workspace', '/shared'] }, permissionMode: 'approval-required', signal: new AbortController().signal })
+    const cfg = config()
+    const provider = new AntigravityProvider(cfg, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const cursor = encodeAntigravityCursor(provider.info.id, 'native-old', antigravitySessionScope(cfg, '/workspace'))
+    const session = await provider.openSession({ route: route(), session: sessionId('resumed'), resumeCursor: cursor, clientFilesystem: { ...clientFilesystem(), workspaceRoots: ['/workspace', '/shared'] }, permissionMode: 'approval-required', signal: new AbortController().signal })
     expect(session.ref.nativeSession).toBe('native-old')
     expect(connection.calls.find(call => call.method === 'session/resume')?.params).toMatchObject({ sessionId: 'native-old', cwd: '/workspace', additionalDirectories: ['/shared', '/attachments'] })
     await session.dispose()

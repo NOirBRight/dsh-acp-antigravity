@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { AntigravityActivityStore } from '../src/activity-store.js'
 import { createAntigravityLlmBridge } from '../src/llm-bridge.js'
+import { validRef } from './bridge-fixtures.js'
 import { apply, type DshPluginContext } from '../src/dsh-plugin.js'
 
 vi.mock('../src/llm-bridge.js', () => ({ createAntigravityLlmBridge: vi.fn(() => ({})) }))
@@ -26,14 +27,14 @@ it('stores native activity independently without appending any Core session even
     await apply(ctx, { enabled: false })
     expect(on).toHaveBeenCalledWith('llm/stream', expect.any(Function))
     const sink = vi.mocked(createAntigravityLlmBridge).mock.calls.at(-1)![3]!
-    sink.appendSessionReady!('session-native')
+    sink.appendSessionReady!('session-native', validRef({ session: 'session-native' }))
     sink.appendToolEvents!('session-native', [{ type: 'antigravity/tool-start', data: { toolId: 'read', name: 'Read', status: 'completed' } }])
     expect(append).not.toHaveBeenCalled()
     const restored = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history')).read('session-native')
     expect(restored.records.map(record => record.type)).toEqual(['antigravity/session-ready', 'antigravity/tool-start'])
-    expect(() => sink.appendSessionReady!(undefined)).toThrow(/session/i)
+    expect(() => sink.appendSessionReady!(undefined, validRef())).toThrow(/session/i)
     vi.spyOn(AntigravityActivityStore.prototype, 'append').mockImplementationOnce(() => { throw new Error('EACCES /private/path') })
-    expect(() => sink.appendSessionReady!('failed-storage')).toThrow(/^Unable to persist Antigravity activity; native execution stopped[.]$/)
+    expect(() => sink.appendSessionReady!('failed-storage', validRef({ session: 'failed-storage' }))).toThrow(/^Unable to persist Antigravity activity; native execution stopped[.]$/)
   } finally {
     vi.restoreAllMocks()
     vi.unstubAllEnvs()

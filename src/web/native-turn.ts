@@ -107,13 +107,13 @@ export function isOwnedByTurn(firstSeenMs: number, startMs: number, endMs: numbe
  * @param includeEarlier - True for the earliest loaded turn: include records before startMs.
  * @returns The owning turn's rows.
  */
-export function rowsForTurnWindow(
-  rows: readonly AntigravityToolRowData[],
+export function rowsForTurnWindow<T extends { readonly firstSeenAt: string }>(
+  rows: readonly T[],
   startMs: number,
   nextStartMsValue: number | null,
   nowMs: number = Date.now(),
   includeEarlier = false,
-): readonly AntigravityToolRowData[] {
+): readonly T[] {
   return rows.filter(row => {
     const ms = Date.parse(row.firstSeenAt)
     if (!Number.isFinite(ms)) return false

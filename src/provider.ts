@@ -9,6 +9,7 @@ import {
   type ExternalAgentSession,
 } from '@deepseek-ai/dsh-acp-provider'
 import { isAbsolute } from 'node:path'
+import { antigravitySessionScope, decodeAntigravityCursor } from './cursor.js'
 import { antigravitySignInRequiredMessage, clearAntigravityProfile, redactAntigravityText, resolveAntigravityProfileDirectory } from './auth.js'
 import { errorMessage, isRecord } from './decode.js'
 import { buildAntigravityLaunchSpec, type AntigravityLaunchSpec, validateAntigravityInstallation, type AntigravityInstallationProbe } from './installation.js'
@@ -95,18 +96,17 @@ export class AntigravityProvider implements ExternalAgentProvider {
       const response = await this.openNativeSession(connection, request, cwd, filesystem)
       const models = modelsFromSessionResponse(response)
       const selectedModel = resolveAntigravityModel(String(request.route.model), models)
-      const native = request.resumeCursor?.value ?? nativeSessionId(response)
+      const native = request.resumeCursor === undefined ? nativeSessionId(response) : decodeAntigravityCursor(request.resumeCursor, antigravitySessionScope(this.config, cwd))
       if (String(selectedModel.id) !== ANTIGRAVITY_DEFAULT_MODEL) await connection.request('session/set_config_option', { sessionId: native, configId: 'model', value: String(selectedModel.id) }, request.signal)
       await connection.request('session/set_mode', { sessionId: native, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
       this.assertActive()
-      const rawSession = new AntigravitySession(connection, this.info.id, request.session, native, this.config, filesystem)
+      const rawSession = new AntigravitySession(connection, this.info.id, request.session, native, this.config, antigravitySessionScope(this.config, cwd), filesystem)
       const session = new ManagedExternalAgentSession(rawSession)
       this.sessions.add(session)
       let disposal: Promise<void> | undefined
-      const trackedSession: ExternalAgentSession & { configure: typeof rawSession.configure } = {
+      const trackedSession: ExternalAgentSession = {
         ref: session.ref,
         supportedModes: session.supportedModes,
-        configure: (model, mode, signal) => rawSession.configure(model, mode, signal),
         runTurn: (turnRequest, turnHost) => session.runTurn(turnRequest, turnHost),
         dispose: () => {
           disposal ??= session.dispose().finally(() => { this.sessions.delete(session) })
@@ -274,8 +274,9 @@ export class AntigravityProvider implements ExternalAgentProvider {
     const params = { cwd, mcpServers: [], ...(additionalDirectories.length === 0 ? {} : { additionalDirectories }) }
     if (request.resumeCursor !== undefined) {
       if (request.resumeCursor.provider !== this.info.id) throw new Error('Antigravity resume cursor belongs to another provider')
-      if (this.identity?.resumeMethod === 'resume') return connection.request('session/resume', { ...params, sessionId: request.resumeCursor.value }, request.signal)
-      if (this.identity?.resumeMethod === 'load') return connection.request('session/load', { ...params, sessionId: request.resumeCursor.value }, request.signal)
+      const nativeId = decodeAntigravityCursor(request.resumeCursor, antigravitySessionScope(this.config, cwd))
+      if (this.identity?.resumeMethod === 'resume') return connection.request('session/resume', { ...params, sessionId: nativeId }, request.signal)
+      if (this.identity?.resumeMethod === 'load') return connection.request('session/load', { ...params, sessionId: nativeId }, request.signal)
       throw new Error('Antigravity ACP does not advertise session resume')
     }
     return connection.request('session/new', params, request.signal)

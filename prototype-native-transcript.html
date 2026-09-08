@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE · A DSH-identical native rows</title>
+<style>
+  :root {
+    --bg: #fff;
+    --text: #0a0a0a;
+    --secondary: #525252;
+    --tertiary: #737373;
+    --caption: #a3a3a3;
+    --line: rgba(0,0,0,.10);
+    --fill: #f7f7f8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fill); color: var(--text); font: 14px/24px ui-sans-serif, system-ui, "PingFang SC", sans-serif; }
+  .app { max-width: 720px; margin: 0 auto; min-height: 100dvh; background: var(--bg); }
+  .top { padding: 16px 24px 12px; border-bottom: 1px solid var(--line); }
+  .top h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .top p { margin: 4px 0 0; color: var(--tertiary); font-size: 12px; line-height: 18px; }
+  .chat { padding: 20px 24px 108px; }
+  .user { margin: 0 0 18px auto; max-width: 72%; background: var(--fill); border-radius: 12px; padding: 8px 12px; line-height: 22px; }
+  .asst { display: flex; flex-direction: column; gap: 0; }
+
+  /* DisclosureRow 24px chrome */
+  .droot { display: flex; flex-direction: column; width: 100%; min-width: 0; }
+  .drow {
+    position: relative; overflow: hidden; display: flex; align-items: center;
+    height: 24px; min-width: 0; cursor: pointer;
+  }
+  .leading {
+    position: relative; flex: none; width: 16px; height: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-right: 6px; color: var(--tertiary);
+  }
+  .iconIdle { display: inline-flex; opacity: 1; transition: opacity 100ms ease; }
+  .chevronHover { position: absolute; inset: 0; margin: auto; opacity: 0; transition: opacity 100ms ease; color: var(--secondary); }
+  .drow:hover .iconIdle { opacity: 0; }
+  .drow:hover .chevronHover { opacity: 1; }
+  .droot[data-open] .iconIdle, .droot[data-open] .chevronHover { display: none; }
+  .droot[data-open] .chevronOpen { display: inline-flex; }
+  .chevronOpen { display: none; color: var(--secondary); }
+  .title { flex: none; font-size: 14px; line-height: 24px; font-weight: 400; color: var(--secondary); }
+  .sep { flex: none; width: 2px; height: 2px; margin: 0 8px; border-radius: 1px; background: var(--caption); }
+  .sum {
+    min-width: 0; overflow: hidden; flex: 1 1 auto;
+    color: var(--tertiary); font-size: 14px; line-height: 24px;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .thinkBody, .taskBody {
+    padding: 4px 0 4px 22px;
+    color: var(--tertiary); font-size: 14px; line-height: 24px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .taskBody { display: flex; flex-direction: column; gap: 0; padding-bottom: 6px; }
+  /* no outer frame — nested tools are just more 24px rows, indented like Think body */
+
+  .note { margin: 16px 0 0; color: var(--tertiary); font-size: 12px; line-height: 18px; }
+  .bar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    background: #111; color: #fff; border-radius: 999px; z-index: 20; font-size: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.16);
+  }
+  .bar button { background: #333; color: #fff; border: 0; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; }
+  .bar b { min-width: 240px; text-align: center; }
+</style>
+</head>
+<body>
+<!-- PROTOTYPE throwaway. A is the DSH-identical candidate. ?variant=A|B|C -->
+<div class="app">
+  <div class="top">
+    <h1>Native transcript · prototype A (DSH chrome)</h1>
+    <p>无外框。24px DisclosureRow：16px leading、icon hover→chevron、title · summary。Think 不是 tool。子代理工具缩进收在 Task 下。对照 SSE：prototype-native-transcript-sse.md</p>
+  </div>
+  <div class="chat">
+    <div class="user">排查 composer picker 在老会话里切 EA 的问题，并跑相关测试。</div>
+    <div id="stage"></div>
+  </div>
+</div>
+<div class="bar">
+  <button type="button" id="prev">←</button>
+  <b id="label">A</b>
+  <button type="button" id="next">→</button>
+</div>
+<script>
+const chevron = '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z"/></svg>';
+const ICONS = {
+  think: '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="7.06" cy="7.06" r="1.13"/><path d="M2.2 2.2c1.3-1.3 3.6-.9 5.1.2 1.5-1.1 3.8-1.5 5.1-.2 1.3 1.3.9 3.6-.2 5.1 1.1 1.5 1.5 3.8.2 5.1-1.3 1.3-3.6.9-5.1-.2-1.5 1.1-3.8 1.5-5.1.2-1.3-1.3-.9-3.6.2-5.1C.9 5.8.5 3.5 2.2 2.2z" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>',
+  read: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.24 4.8v1.3H4.76V4.8h6.48zM9.41 7.84v1.3H4.76v-1.3h4.65z"/><path d="M9.23.55h-2.47C5.81.55 5.03.55 4.41.61 3.78.68 3.24.83 2.76 1.17c-.28.2-.52.45-.72.73C1.69 2.37 1.54 2.92 1.48 3.55 1.41 4.17 1.41 4.94 1.41 5.9v4.2c0 .96 0 1.73.07 2.35.07.63.21 1.18.56 1.65.2.28.45.52.72.73.48.35 1.02.5 1.65.56.62.07 1.4.07 2.35.07h2.47c.96 0 1.73 0 2.35-.07.63-.07 1.18-.21 1.65-.56.28-.2.52-.45.73-.73.35-.47.49-1.02.56-1.65.07-.62.07-1.4.07-2.35V5.9c0-.96 0-1.73-.07-2.35-.07-.63-.21-1.18-.56-1.65-.2-.28-.45-.52-.73-.73C12.76.83 12.22.68 11.59.61 10.97.54 10.19.55 9.23.55zM6.77 1.9c-.99 0-1.68 0-2.21.06-.51.05-.8.16-1 .31-.16.12-.31.26-.43.43-.15.2-.25.49-.31 1-.06.53-.06 1.22-.06 2.21v4.2c0 .99 0 1.68.06 2.21.06.51.16.8.31 1 .12.16.26.31.43.42.2.15.49.25 1 .31.53.06 1.22.06 2.21.06h2.47c.99 0 1.68 0 2.21-.06.51-.06.8-.16 1-.31.16-.11.31-.26.43-.42.15-.2.25-.49.31-1 .06-.53.06-1.22.06-2.21V5.9c0-.99 0-1.68-.06-2.21-.06-.51-.16-.8-.31-1-.12-.17-.27-.31-.43-.43-.2-.15-.49-.26-1-.31-.53-.06-1.22-.06-2.21-.06H6.77z"/></svg>',
+  bash: '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M2.85 3.25h8.3c.7 0 1.1.12 1.35.4.2.2.32.55.38 1.15.07.6.07 1.4.07 2.5v.7c0 1.1 0 1.9-.07 2.5-.06.6-.18.95-.38 1.15-.25.28-.65.4-1.35.4H2.85c-.7 0-1.1-.12-1.35-.4-.2-.2-.32-.55-.38-1.15C1.05 9.9 1.05 9.1 1.05 8v-.7c0-1.1 0-1.9.07-2.5.06-.6.18-.95.38-1.15.25-.28.65-.4 1.35-.4zm3.5 2.55 1.9 1.9-1.9 1.9-.6-.6 1.3-1.3-1.3-1.3.6-.6zm1.7 3.15h2.1v.85H8.05v-.85z"/></svg>',
+  search: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.89 6.65a5.24 5.24 0 1 0-10.54 0 5.24 5.24 0 0 0 10.54 0zm1.35 0A6.62 6.62 0 1 1 0 6.65a6.62 6.62 0 0 1 13.24 0z"/><path d="m16 15.04-.96.96-3.51-3.53.96-.96L16 15.04z"/></svg>',
+  sparkle: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.1 3.1Q6.6 7.8 11.3 8.3Q6.6 8.8 6.1 13.5Q5.6 8.8 .9 8.3Q5.6 7.8 6.1 3.1Z"/><path d="M11.9 1Q12.2 3.7 14.9 4Q12.2 4.3 11.9 7Q11.6 4.3 8.9 4Q11.6 3.7 11.9 1Z"/></svg>',
+};
+
+function leading(kind) {
+  return '<span class="leading">'
+    + '<span class="iconIdle">' + ICONS[kind] + '</span>'
+    + '<span class="chevronHover">' + chevron + '</span>'
+    + '<span class="chevronOpen">' + chevron + '</span>'
+    + '</span>';
+}
+
+function row(kind, title, sum) {
+  return '<div class="droot"><div class="drow">'
+    + leading(kind)
+    + '<span class="title">' + title + '</span>'
+    + (sum ? '<span class="sep"></span><span class="sum">' + sum + '</span>' : '')
+    + '</div></div>';
+}
+
+function fold(kind, title, sum, bodyHtml) {
+  return '<div class="droot" data-fold>'
+    + '<div class="drow" data-toggle>'
+    + leading(kind)
+    + '<span class="title">' + title + '</span>'
+    + '<span class="sep"></span><span class="sum">' + sum + '</span>'
+    + '</div>'
+    + '<div class="foldBody" hidden>' + bodyHtml + '</div>'
+    + '</div>';
+}
+
+function variantA() {
+  return ''
+    + fold('think', 'Think', 'The user wants native tool rows to match DSH chrome.',
+        '<div class="thinkBody">The user wants native tool rows to match DSH chrome.\nNo outer frame. Icon idle → chevron on hover. Think is reasoning-delta, not a tool.</div>')
+    + row('read', 'Read', 'src/client/picker/ComposerPicker.tsx')
+    + row('search', 'Search', '**/*runtime-lock*')
+    + fold('sparkle', 'Task', 'Explore · 深度代码库探索',
+        '<div class="taskBody">'
+        + row('bash', 'Bash', 'rg -n "agentLocked" src/client/picker')
+        + row('read', 'Read', 'src/client/runtime-lock.ts')
+        + row('bash', 'Bash', 'pnpm exec vitest run tests/runtime-lock.spec.ts')
+        + '</div>')
+    + row('bash', 'Bash', 'pnpm exec vitest run tests/catalog.test.ts')
+    + '<p class="note">A 对照：Think 来自 assistant/chunk reasoning-delta；其余来自 sidecar antigravity/tool-* 映射成 DSH title，不写 Core tool/call。Hover 左侧 icon 看 chevron。</p>';
+}
+
+function variantB() {
+  return '<p class="note">B 已否决方向（Spawn 卡）。留下只为对照：卡片外框就是你不要的东西。</p>'
+    + '<div style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0">Explore 卡片……</div>'
+    + row('read', 'Read', 'src/client/picker/ComposerPicker.tsx');
+}
+
+function variantC() {
+  return '<p class="note">C 已否决方向（左侧轨）。窄对话里会抢主列。</p>'
+    + row('read', 'Read', 'src/client/picker/ComposerPicker.tsx');
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'DSH DisclosureRow（候选）', render: variantA },
+  { key: 'B', name: 'Spawn 卡（不要）', render: variantB },
+  { key: 'C', name: '子代理轨（不要）', render: variantC },
+];
+function current() {
+  const v = new URLSearchParams(location.search).get('variant') || 'A';
+  return VARIANTS.some(x => x.key === v) ? v : 'A';
+}
+function paint() {
+  const v = current();
+  const meta = VARIANTS.find(x => x.key === v);
+  document.getElementById('stage').innerHTML = meta.render();
+  document.getElementById('label').textContent = v + ' · ' + meta.name;
+  document.querySelectorAll('[data-toggle]').forEach(row => {
+    row.addEventListener('click', () => {
+      const root = row.parentElement;
+      const open = root.getAttribute('data-open') === '';
+      if (open) {
+        root.removeAttribute('data-open');
+        root.querySelector('.foldBody').hidden = true;
+      } else {
+        root.setAttribute('data-open', '');
+        root.querySelector('.foldBody').hidden = false;
+      }
+    });
+  });
+}
+function go(d) {
+  const i = VARIANTS.findIndex(x => x.key === current());
+  const next = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length].key;
+  const url = new URL(location.href);
+  url.searchParams.set('variant', next);
+  history.replaceState(null, '', url);
+  paint();
+}
+document.getElementById('prev').onclick = () => go(-1);
+document.getElementById('next').onclick = () => go(1);
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input,textarea,[contenteditable]')) return;
+  if (e.key === 'ArrowLeft') go(-1);
+  if (e.key === 'ArrowRight') go(1);
+});
+paint();
+</script>
+</body>
+</html>

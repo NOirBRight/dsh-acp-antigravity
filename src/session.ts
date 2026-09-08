@@ -1,5 +1,4 @@
 import {
-  resumeCursor,
   sessionId,
   truncateUtf8,
   withBoundedExternalAgentHost,
@@ -15,6 +14,8 @@ import {
   type ExternalAgentTurnResult,
 } from '@deepseek-ai/dsh-acp-provider'
 import { redactAntigravityText } from './auth.js'
+import { encodeAntigravityCursor } from './cursor.js'
+import { acpUsage } from './usage.js'
 import { errorMessage, isRecord, stringValue } from './decode.js'
 import { createAntigravityInteractionHandler } from './interaction.js'
 import { mapPermissionMode, normalizeAntigravitySessionUpdate } from './mapping.js'
@@ -30,15 +31,9 @@ export class AntigravitySession implements ExternalAgentSession {
   private disposed = false
   private disposePromise: Promise<void> | undefined
 
-  constructor(private readonly connection: AcpConnection, provider: ExternalAgentProvider['info']['id'], session: ExternalAgentOpenRequest['session'], private readonly nativeId: string, private readonly config: AntigravityProviderConfig, private readonly filesystem?: AntigravityClientFilesystem) {
+  constructor(private readonly connection: AcpConnection, provider: ExternalAgentProvider['info']['id'], session: ExternalAgentOpenRequest['session'], private readonly nativeId: string, private readonly config: AntigravityProviderConfig, scope: string, private readonly filesystem?: AntigravityClientFilesystem) {
     this.nativeSession = sessionId(nativeId)
-    this.ref = { provider, session, nativeSession: this.nativeSession, resumeCursor: resumeCursor(provider, nativeId) }
-  }
-
-  async configure(model: string, permissionMode: ExternalAgentTurnRequest['permissionMode'], signal?: AbortSignal): Promise<void> {
-    if (this.disposed) throw new Error('Antigravity session is disposed')
-    if (model !== 'default') await this.connection.request('session/set_config_option', { sessionId: this.nativeId, configId: 'model', value: model }, signal)
-    await this.connection.request('session/set_mode', { sessionId: this.nativeId, modeId: mapPermissionMode(permissionMode) }, signal)
+    this.ref = { provider, session, nativeSession: this.nativeSession, resumeCursor: encodeAntigravityCursor(provider, nativeId, scope) }
   }
 
   /** Send one prompt; native tools remain owned by ACP and are only published as activity. */
@@ -86,6 +81,7 @@ export class AntigravitySession implements ExternalAgentSession {
     request.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const prompt = await promptBlocks(request.prompt, request.attachments, this.filesystem)
+      if (request.model !== undefined && request.model !== 'default') await this.connection.request('session/set_config_option', { sessionId: this.nativeId, configId: 'model', value: request.model }, request.signal)
       await this.connection.request('session/set_mode', { sessionId: this.nativeId, modeId: mapPermissionMode(request.permissionMode) }, request.signal)
       const response = await this.connection.request('session/prompt', { sessionId: this.nativeId, prompt }, request.signal)
       await events
@@ -146,10 +142,8 @@ function responseFailure(response: unknown): string | undefined {
 }
 
 async function publishUsage(response: unknown, host: ExternalAgentTurnHost): Promise<void> {
-  if (!isRecord(response) || !isRecord(response.usage)) return
-  const inputTokens = typeof response.usage.inputTokens === 'number' ? response.usage.inputTokens : undefined
-  const outputTokens = typeof response.usage.outputTokens === 'number' ? response.usage.outputTokens : undefined
-  await host.publish({ type: 'usage', ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }) })
+  const usage = acpUsage(isRecord(response) ? response.usage : undefined)
+  if (usage !== undefined) await host.publish({ type: 'usage', ...usage })
 }
 
 function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === 'AbortError' }

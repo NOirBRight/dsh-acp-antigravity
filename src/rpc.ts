@@ -5,6 +5,7 @@ import {
   ACTIVITY_BINDING_ENDPOINT,
   ACTIVITY_ENDPOINT,
   decodeActivitySessionId,
+  nativeSessionBinding,
   type AntigravityActivityHistory,
 } from './activity-contract.js'
 import {
@@ -20,7 +21,6 @@ import {
   type AcpSettingsSnapshot,
   type AntigravityQuotaSnapshot,
 } from './client-contract.js'
-import { ANTIGRAVITY_SESSION_READY } from './tool-events.js'
 
 type RpcResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details?: object } }
 
@@ -65,7 +65,7 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
       try {
         const history = await deps.readActivity(sessionId)
         if (endpoint === ACTIVITY_BINDING_ENDPOINT) {
-          const bound = history.records.some(record => record.type === ANTIGRAVITY_SESSION_READY)
+          const bound = nativeSessionBinding(history, sessionId) !== undefined
           return { ok: true, value: { provider: bound ? 'antigravity' : null } }
         }
         return { ok: true, value: history }

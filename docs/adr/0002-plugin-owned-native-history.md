@@ -10,4 +10,6 @@ Reading activity does not start the runtime or check an account. Continuing a bo
 
 Activity RPC uses the same full-Host browser authentication as the rc1 session interface; a session identifier is an address, not a credential, and no per-session caller isolation is claimed. Activity storage errors are returned by the activity RPC without blocking Core history reads. Existing Core logs containing unsupported required custom events are not rewritten.
 
+Ready records may include a native reference whose opaque cursor is bound to the account profile and workspace. History without that cursor remains readable but is not resumable. Unreadable bindings, incompatible configuration, and failed native resume reject execution without opening a replacement context. Full-access authorization is audited in the sidecar before execution; it does not alter tool or trajectory ownership.
+
 Acceptance requires a new native conversation, Host restart, and reads with the native runtime unavailable; verify the basic conversation independently of plugin rendering and reject execution on an incompatible bound route. No production deployment is authorized by this decision.

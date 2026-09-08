@@ -13,6 +13,7 @@ import {
   type LogoutRequest,
   type NewSessionRequest,
   type PromptRequest,
+  type PromptResponse,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
   type SetSessionConfigOptionRequest,
@@ -39,12 +40,30 @@ export interface AcpConnection {
   close(): Promise<void>
 }
 
+/** Passive lab observer for ACP wire usage capture.
+ *
+ * Every callback is optional and best-effort: observer errors are swallowed so
+ * lab capture can never corrupt or stop the transport. No new ACP methods are
+ * introduced and the SDK is not forked.
+ */
+export interface AcpWireObserver {
+  /** One complete pre-deserialization JSON-RPC line received from the native agent. */
+  readonly onRawLine?: (line: string) => void
+  /** Decoded session/update notification, exactly as delivered to the notification handler. */
+  readonly onSessionUpdate?: (params: unknown) => void
+  /** Decoded session/prompt result on success. */
+  readonly onPromptResult?: (result: unknown) => void
+  /** session/prompt rejection reason on failure. */
+  readonly onPromptError?: (error: unknown) => void
+}
+
 /** Options for the official SDK stdio transport. */
 export interface StdioAcpOptions {
   readonly maxLineBytes?: number
   readonly cancelGraceMs?: number
   readonly onStderr?: (text: string) => void
   readonly onAuthorizationUrl?: (request: AntigravityAuthorizationRequest) => void
+  readonly observer?: AcpWireObserver
 }
 
 /** Start the configured executable with the official ACP TypeScript SDK. */
@@ -82,12 +101,49 @@ export function spawnAntigravityAcp(spec: AntigravityLaunchSpec, options: StdioA
   })
   child.stdout.pipe(guard)
   child.stderr.pipe(stderrGuard)
-  const connection = new SdkAcpConnection(child, guard, cancelGraceMs)
+  const connection = new SdkAcpConnection(child, guard, cancelGraceMs, options.observer)
   guard.once('error', error => connection.fail(error))
   stderrGuard.once('error', error => connection.fail(error))
   child.once('error', error => connection.fail(error))
   child.once('exit', (code, signal) => connection.fail(new Error('Antigravity ACP process exited (' + String(code ?? signal ?? 'unknown') + ')')))
   return connection
+}
+
+function tellObserver(observer: AcpWireObserver | undefined, action: (watcher: AcpWireObserver) => void): void {
+  if (observer === undefined) return
+  try {
+    action(observer)
+  } catch {
+    // Observer diagnostics must never disturb the ACP transport.
+  }
+}
+
+function tapWhenObserved(observer: AcpWireObserver | undefined, downstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  if (observer === undefined) return downstream
+  return tapLines(downstream, line => tellObserver(observer, watcher => watcher.onRawLine?.(line)))
+}
+
+function tapLines(source: ReadableStream<Uint8Array>, onLine: (line: string) => void): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder()
+  let pending = ''
+  return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk)
+      pending += decoder.decode(chunk, { stream: true })
+      let newline = pending.indexOf('\n')
+      while (newline >= 0) {
+        const line = pending.slice(0, newline)
+        pending = pending.slice(newline + 1)
+        newline = pending.indexOf('\n')
+        if (line.length === 0) continue
+        try {
+          onLine(line)
+        } catch {
+          // A throwing lab observer must not break frame delivery.
+        }
+      }
+    },
+  }))
 }
 
 /** Adapter around ClientSideConnection that retains the generic seam for test fakes. */
@@ -100,12 +156,15 @@ class SdkAcpConnection implements AcpConnection {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly guard: LineBoundTransform
 
-  constructor(child: ChildProcessWithoutNullStreams, guard: LineBoundTransform, private readonly cancelGraceMs: number) {
+  constructor(child: ChildProcessWithoutNullStreams, guard: LineBoundTransform, private readonly cancelGraceMs: number, private readonly observer?: AcpWireObserver) {
     this.child = child
     this.guard = guard
     const client: Client = {
       requestPermission: params => this.callClient('session/request_permission', params) as Promise<unknown> as Promise<RequestPermissionResponse>,
-      sessionUpdate: async params => { this.notificationHandler?.('session/update', params) },
+      sessionUpdate: async params => {
+        tellObserver(this.observer, watcher => watcher.onSessionUpdate?.(params))
+        this.notificationHandler?.('session/update', params)
+      },
       readTextFile: params => this.callClient('fs/read_text_file', params) as Promise<unknown> as Promise<ReadTextFileResponse>,
       writeTextFile: params => this.callClient('fs/write_text_file', params) as Promise<unknown> as Promise<WriteTextFileResponse>,
       unstable_createElicitation: async params => toElicitationResponse(await this.callClient('elicitation/create', params)),
@@ -118,7 +177,7 @@ class SdkAcpConnection implements AcpConnection {
     }
     this.sdk = new ClientSideConnection(() => client, ndJsonStream(
       NodeWritable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-      NodeReadable.toWeb(guard) as ReadableStream<Uint8Array>,
+      tapWhenObserved(this.observer, NodeReadable.toWeb(guard) as ReadableStream<Uint8Array>),
     ))
   }
 
@@ -131,6 +190,21 @@ class SdkAcpConnection implements AcpConnection {
   notify(method: string, params?: unknown): void {
     if (this.closed) return
     if (method === 'session/cancel') void this.sdk.cancel(asAcp<CancelNotification>(params, 'session/cancel')).catch(() => { /* The process may already be gone. */ })
+  }
+
+  private observePrompt(operation: Promise<PromptResponse>): Promise<PromptResponse> {
+    const observer = this.observer
+    if (observer === undefined) return operation
+    return operation.then(
+      result => {
+        tellObserver(observer, watcher => watcher.onPromptResult?.(result))
+        return result
+      },
+      error => {
+        tellObserver(observer, watcher => watcher.onPromptError?.(error))
+        throw error
+      },
+    )
   }
 
   setRequestHandler(handler: AcpRequestHandler | undefined): void { this.requestHandler = handler }
@@ -175,7 +249,7 @@ class SdkAcpConnection implements AcpConnection {
       case 'session/resume': return this.sdk.resumeSession(asAcp<ResumeSessionRequest>(params, method))
       case 'session/set_mode': return this.sdk.setSessionMode(asAcp<SetSessionModeRequest>(params, method))
       case 'session/set_config_option': return this.sdk.setSessionConfigOption(asAcp<SetSessionConfigOptionRequest>(params, method))
-      case 'session/prompt': return this.sdk.prompt(asAcp<PromptRequest>(params, method))
+      case 'session/prompt': return this.observePrompt(this.sdk.prompt(asAcp<PromptRequest>(params, method)))
       case 'session/close': return this.sdk.closeSession(asAcp<CloseSessionRequest>(params, method))
       case 'logout': return this.sdk.logout(asAcp<LogoutRequest>(params, method))
       default: return Promise.reject(new Error('Unsupported ACP client request: ' + method))
