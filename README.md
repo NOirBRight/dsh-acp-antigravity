@@ -6,16 +6,16 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 
 ## Install and verify
 
-The ACP library is a runtime dependency pinned to its versioned GitHub release. The shared Provider UI is installed alongside this bundle; no sibling checkout is required.
+The ACP library is pinned to its versioned GitHub release. Install the shared Provider UI and the read-only tool-card compatibility artifact alongside this bundle; no sibling checkout is required. The tool-card artifact is an explicitly versioned, unofficial additive build of DSH rc.1, not an npm release by the upstream project.
 
 ```sh
-dsh plugin --profile web add https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.0/deepseek-ai-dsh-acp-antigravity-0.1.0.tgz
+dsh plugin --profile web add https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.1/deepseek-ai-dsh-acp-antigravity-0.1.1.tgz
 ```
 
-For source verification after the pinned dependencies are published:
+For source verification with the published dependency pins:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run test
 pnpm run build
@@ -79,13 +79,13 @@ Ready records persist the native reference before prompting. Resume cursors are 
 
 ## Paired provider development
 
-This working tree requires the paired provider source changes before a coordinated release. The existing release archive pin remains unchanged until that library is published; an unmodified pinned install does not verify the new source. Check both source trees explicitly without changing installed dependencies:
+Normal builds use the published provider and UI artifact pins. To develop a later shared-provider change before publication, check both source trees explicitly without changing installed dependencies:
 
 ```sh
 pnpm run check:provider -- /absolute/path/to/dsh-acp-provider
 ```
 
-The command checks each TypeScript face and runs keyless tests against only the provider package’s published exports. It does not launch the native executable or modify the running DSH GUI. Before releasing, publish the provider candidate, update this package’s archive pin and lockfile, and run the built host/client smoke against the supported DSH artifact pair.
+The command checks each TypeScript face and runs keyless tests against only the provider package’s published exports. It does not launch the native executable or modify the running DSH GUI. Release verification uses a clean frozen-lockfile installation and built host/client smoke without this source override. The tool-card recipe is `node scripts/build-ui-tool.mjs --source=/path/to/dsh-source --out=/fresh/artifact-directory`; it requires the pinned DSH source commit and its prepared build toolchain, rejects existing outputs, and records source, patch, builder and artifact hashes. Retire the compatibility artifact when an upstream release supplies the same public read-only API.
 
 ## Session behavior
 
@@ -102,7 +102,7 @@ The command checks each TypeScript face and runs keyless tests against only the 
 
 ## Host composition
 
-A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and adds no conversation tabs. The official Chat and Trajectory views remain unchanged. ACP tool activity is stored in plugin-owned history, never as a durable DSH tool-call event or execution, nor as assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark. Paired-build prerequisite: stock `@deepseek-ai/dsh-client-ui-tool` 0.1.2-rc.1 lacks the public card export, so the plugin currently requires our patched ui-tool artifact installed alongside it; no standalone npm compatibility is claimed.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and adds no conversation tabs. The official Chat and Trajectory views remain unchanged. ACP tool activity is stored in plugin-owned history, never as a durable DSH tool-call event or execution, nor as assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark. Stock `@deepseek-ai/dsh-client-ui-tool` 0.1.2-rc.1 lacks the public card export; the installation command above includes the published 0.1.2-rc.1-native.1 compatibility artifact. This is the supported artifact combination, rather than an implicit local patch.
 
 installAntigravityProvider() remains the library mount for hosts that own their own registry. The LLM bridge supports native turns, permission prompts, cancellation and resume. Reading saved history does not require native execution; continuing a native turn still requires the runtime and authentication.
 
