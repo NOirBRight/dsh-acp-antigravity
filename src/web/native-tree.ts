@@ -1,8 +1,9 @@
 /** Native trajectory grouping; no launch-to-child or timing inference. */
-import type { AntigravityAgentData, AntigravityToolRowData } from './native-activity.js'
+import type { AntigravityAgentData, AntigravityAgentTextRow, AntigravityToolRowData } from './native-activity.js'
 
 export type NativeActivityBranch =
   | { kind: 'tool'; key: string; row: AntigravityToolRowData; order: number }
+  | { kind: 'text'; key: string; text: string; thought: boolean; order: number; firstSeenAt: string }
   | NativeAgentBranch
 
 export interface NativeAgentBranch {
@@ -12,7 +13,15 @@ export interface NativeAgentBranch {
   firstSeenAt: string
   order: number
   toolCount: number
+  running: boolean
   children: NativeActivityBranch[]
+}
+
+/** Whether a grouped branch still has pending/running native work. */
+export function activityBranchRunning(branch: NativeActivityBranch): boolean {
+  if (branch.kind === 'tool') return branch.row.state.status === 'pending' || branch.row.state.status === 'running'
+  if (branch.kind === 'text') return false
+  return branch.running
 }
 
 /** Group child tools exactly once by native trajectory within a runtime epoch.
@@ -21,12 +30,12 @@ export interface NativeAgentBranch {
  * @param observations - First child sightings, including agents that emit no tools.
  * @returns Ordered root tools and recursively nested, independent child trajectories.
  */
-export function groupNativeActivity(rows: readonly AntigravityToolRowData[], observations: readonly AntigravityAgentData[] = []): NativeActivityBranch[] {
+export function groupNativeActivity(rows: readonly AntigravityToolRowData[], observations: readonly AntigravityAgentData[] = [], texts: readonly AntigravityAgentTextRow[] = []): NativeActivityBranch[] {
   const agents = new Map<string, NativeAgentBranch>()
   const parents = new Map<string, string | undefined>()
   const conflicts = new Set<string>()
   const keyOf = (row: { epoch: number }, trajectory: string): string => `${row.epoch}\n${trajectory}`
-  const points: AntigravityAgentData[] = [...observations, ...rows.flatMap(row => row.state.ownership === undefined ? [] : [{ ...row, ownership: row.state.ownership }])]
+  const points: AntigravityAgentData[] = [...observations, ...rows.flatMap(row => row.state.ownership === undefined ? [] : [{ ...row, ownership: row.state.ownership }]), ...texts.map(text => ({ key: text.key, epoch: text.epoch, firstSeenAt: text.firstSeenAt, ownership: { trajectoryId: text.trajectoryId, ...(text.parentTrajectoryId === undefined ? {} : { parentTrajectoryId: text.parentTrajectoryId }) } }))]
   points.sort((a, b) => Number(a.key) - Number(b.key))
   for (const row of points) {
     const order = Number(row.key)
@@ -38,7 +47,7 @@ export function groupNativeActivity(rows: readonly AntigravityToolRowData[], obs
       else parents.set(key, parent)
     }
     if ((parent !== undefined || (owner.depth ?? 0) > 0) && !agents.has(key)) {
-      agents.set(key, { kind: 'agent', key, trajectoryId: owner.trajectoryId, firstSeenAt: row.firstSeenAt, order, toolCount: 0, children: [] })
+      agents.set(key, { kind: 'agent', key, trajectoryId: owner.trajectoryId, firstSeenAt: row.firstSeenAt, order, toolCount: 0, running: false, children: [] })
     }
   }
   for (const [key] of agents) {
@@ -67,7 +76,18 @@ export function groupNativeActivity(rows: readonly AntigravityToolRowData[], obs
     else {
       agent.children.push(branch)
       agent.toolCount += 1
+      if (activityBranchRunning(branch)) agent.running = true
       if (order < agent.order) { agent.order = order; agent.firstSeenAt = row.firstSeenAt }
+    }
+  }
+  for (const text of texts) {
+    const order = Number(text.key)
+    const agent = agents.get(keyOf(text, text.trajectoryId))
+    const branch: NativeActivityBranch = { kind: 'text', key: text.key, text: text.text, thought: text.kind === 'thought', order, firstSeenAt: text.firstSeenAt }
+    if (agent === undefined) roots.push(branch)
+    else {
+      agent.children.push(branch)
+      if (order < agent.order) { agent.order = order; agent.firstSeenAt = text.firstSeenAt }
     }
   }
   for (const [key, agent] of agents) {
@@ -85,10 +105,12 @@ export function groupNativeActivity(rows: readonly AntigravityToolRowData[], obs
     const parent = parentKey === undefined ? undefined : agents.get(parentKey)
     if (parent === undefined) continue
     parent.toolCount += agent.toolCount
+    if (agent.running) parent.running = true
     if (agent.order < parent.order) { parent.order = agent.order; parent.firstSeenAt = agent.firstSeenAt }
     const remaining = pending.get(parent.key)! - 1
     pending.set(parent.key, remaining)
     if (remaining === 0) ready.push(parent)
   }
+  for (const agent of agents.values()) if (agent.children.length === 0) agent.running = true
   return roots.sort((a, b) => a.order - b.order)
 }

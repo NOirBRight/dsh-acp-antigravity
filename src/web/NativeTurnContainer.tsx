@@ -72,8 +72,9 @@ export function NativeTurnContainer(props: { readonly node: ChatNode<'antigravit
     return rowsForTurnWindow(history.rows, startMs, followingStartMs, Date.now(), includeEarlier)
   }, [history.rows, startMs, followingStartMs, includeEarlier, knownIndex])
   const branches = useMemo(() => groupNativeActivity(rows, knownIndex < 0 ? [] :
-    rowsForTurnWindow(history.agents, startMs, followingStartMs, Date.now(), includeEarlier)),
-  [rows, history.agents, knownIndex, startMs, followingStartMs, includeEarlier])
+    rowsForTurnWindow(history.agents, startMs, followingStartMs, Date.now(), includeEarlier),
+  knownIndex < 0 ? [] : rowsForTurnWindow(history.texts ?? [], startMs, followingStartMs, Date.now(), includeEarlier)),
+  [rows, history.agents, history.texts, knownIndex, startMs, followingStartMs, includeEarlier])
   if (branches.length === 0 && history.error === undefined) return null
   const label = rows.length > 0
     ? props.t('activityTools').replace('{count}', String(rows.length))
@@ -81,7 +82,7 @@ export function NativeTurnContainer(props: { readonly node: ChatNode<'antigravit
   return <section data-antigravity-native-turn={turn} style={wrap}>
     {label === undefined ? null : <p style={head}>{label}</p>}
     {branches.map(branch => {
-      const ms = Date.parse(branch.kind === 'tool' ? branch.row.firstSeenAt : branch.firstSeenAt)
+      const ms = Date.parse(branch.kind === 'tool' ? branch.row.firstSeenAt : branch.kind === 'text' ? branch.firstSeenAt : branch.firstSeenAt)
       const unattributed = !isOwnedByTurn(ms, startMs, endMs)
       return <React.Fragment key={branch.key}>
         {unattributed ? <p data-native-unattributed style={head}>{props.t('activityBetweenTurns')}</p> : null}

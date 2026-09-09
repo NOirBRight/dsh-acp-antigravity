@@ -11,7 +11,7 @@ function row(id: string, trajectoryId?: string, parentTrajectoryId?: string, epo
       ...(trajectoryId === undefined ? {} : { ownership: { trajectoryId, ...(parentTrajectoryId === undefined ? {} : { parentTrajectoryId }) } }) } }
 }
 function tools(branches: NativeActivityBranch[]): string[] {
-  return branches.flatMap(branch => branch.kind === 'tool' ? [branch.row.state.toolId] : tools(branch.children))
+  return branches.flatMap(branch => branch.kind === 'tool' ? [branch.row.state.toolId] : branch.kind === 'agent' ? tools(branch.children) : [])
 }
 
 describe('native trajectory containment', () => {
@@ -37,7 +37,7 @@ describe('native trajectory containment', () => {
   })
   it('shows observed children with no tools without fabricating a tool row', () => {
     const branches = groupNativeActivity([], [{ key: '1', epoch: 1, firstSeenAt: '2026-09-07T00:00:00Z', ownership: { trajectoryId: 'a', parentTrajectoryId: 'r' } }])
-    expect(branches).toMatchObject([{ kind: 'agent', trajectoryId: 'a', toolCount: 0, children: [] }])
+    expect(branches).toMatchObject([{ kind: 'agent', trajectoryId: 'a', toolCount: 0, running: true, children: [] }])
     expect(tools(branches)).toEqual([])
   })
   it('adopts a known parent after an observation with missing parent metadata', () => {
@@ -59,5 +59,22 @@ describe('native trajectory containment', () => {
     const branches = groupNativeActivity([row('a', 'a', 'b'), row('b', 'b', 'a'), row('c1', 'c', 'a'), row('c2', 'c', 'b')])
     expect(tools(branches).sort()).toEqual(['a', 'b', 'c1', 'c2'])
     expect(branches.some(branch => branch.kind === 'agent' && branch.trajectoryId === 'c')).toBe(true)
+  })
+
+  it('nests child-owned text inside the matching trajectory panel', () => {
+    const branches = groupNativeActivity([row('a1', 'a', 'r')], [{ key: '1', epoch: 1, firstSeenAt: '2026-09-07T00:00:00Z', ownership: { trajectoryId: 'a', parentTrajectoryId: 'r' } }], [
+      { key: '2', epoch: 1, firstSeenAt: '2026-09-07T00:00:01Z', trajectoryId: 'a', parentTrajectoryId: 'r', kind: 'text', text: 'child says hi' },
+    ])
+    const agent = branches.find(branch => branch.kind === 'agent' && branch.trajectoryId === 'a')
+    expect(agent?.kind === 'agent' ? agent.children.map(child => child.kind) : []).toEqual(['tool', 'text'])
+    expect(agent?.kind === 'agent' ? agent.children.find(child => child.kind === 'text') : undefined).toMatchObject({ text: 'child says hi' })
+  })
+
+  it('marks a child agent running while a descendant tool is pending', () => {
+    const live = row('a1', 'a', 'r')
+    const branches = groupNativeActivity([row('done', 'b', 'r'), { ...live, state: { ...live.state, status: 'running' } }])
+    const agents = branches.filter(branch => branch.kind === 'agent')
+    expect(agents.find(branch => branch.kind === 'agent' && branch.trajectoryId === 'a')).toMatchObject({ running: true })
+    expect(agents.find(branch => branch.kind === 'agent' && branch.trajectoryId === 'b')).toMatchObject({ running: false })
   })
 })

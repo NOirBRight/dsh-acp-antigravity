@@ -20,16 +20,19 @@ export function reportedUsage(value: unknown): TokenUsage | undefined {
   }
   if ((usage.reasoningTokens ?? 0) > usage.outputTokens) return undefined
   if (usage.totalTokens !== undefined && usage.totalTokens !== usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)) return undefined
+  if (value.usageComplete != null && typeof value.usageComplete !== 'boolean') return undefined
+  if (typeof value.usageComplete === 'boolean') usage.usageComplete = value.usageComplete
   return usage
 }
 
-/** Add complete usage from distinct native prompts, never cumulative updates within one prompt. */
+/** Add reported usage from distinct native prompts, never cumulative updates within one prompt. */
 export function sumTurnUsage(first: TokenUsage | undefined, second: TokenUsage | undefined): TokenUsage | undefined {
   if (first === undefined || second === undefined) return undefined
   const combined: TokenUsage = { inputTokens: first.inputTokens + second.inputTokens, outputTokens: first.outputTokens + second.outputTokens }
   for (const key of ['totalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
     if (first[key] !== undefined && second[key] !== undefined) combined[key] = first[key] + second[key]
   }
+  if (first.usageComplete === false || second.usageComplete === false) combined.usageComplete = false
   return reportedUsage(combined)
 }
 

@@ -1,7 +1,13 @@
-# Native token accounting and effective throughput
+# Native token accounting and request throughput
 
-ACP usage is normalized before the provider host receives it; canonical reasoning and cache details survive the same-process host and LLM bridge. A prompt contributes its final valid cumulative snapshot once. Distinct plan/execution prompts contribute summed complete totals, never a mixture of partial counts. Text tokenization is not a fallback for absent provider telemetry. The bridge uses the host StreamChunk type, including structured finish reasons, so terminal events and assembled usage use the same protocol. Cancellation of a plan continuation remains cancellation of the enclosing stream.
+The pinned SDK prompt and total counters exclude cache. Native ACP aggregate input and total add the cache delta; the adapter then separates cache exactly once. Unknown cache cannot form ACP aggregate usage. Provisional SDK observations can retain known uncached input/output while omitting unknown cache and total. Only a declared fresh session establishes a zero baseline for missing start fields; restored sessions and counter rewinds do not.
 
-Receipt-time measurements are separate from token accounting and event timestamps. `generationElapsedMs: null` excludes ambiguous native samples from speed statistics without discarding their real token counts. Native database step timestamps and `streaming_duration` are not validated decode intervals. The supported formula, limitations and runtime prerequisites are in [README](../../README.md#native-token-telemetry).
+Live observations carry `usageComplete: false`. Final same-attempt reports replace provisional counts; distinct native prompts add reported counts while retaining partiality. Cancellation preserves only observations delivered before the host expires. Missing historical counters and request spans are not reconstructed from wall time.
 
-Regression checks: `tests/usage.test.ts`, `tests/generation-timer.test.ts`, `tests/throughput.test.ts`, and the provider-to-LLM test in `tests/provider.test.ts`. The native patch checker validates the pinned source separately. Live native output and the existing GUI require verification before deployment.
+Child-owned text (`parentTrajectoryId` set and different from `trajectoryId`) stays in the sidecar and child panel, not the parent assistant stream. Request telemetry is native-session scoped, not child-attributed.
+
+`generationElapsedMs` stays `null`. `requestThroughput` pairs raw completed-request output with its measured span, including queue/prefill/TTFT, and sums concurrent durations rather than wall time. It is not decode throughput and does not subtract tool waits from a turn.
+
+Missing or partial usage hides the session cache-hit share and displays partial statistics. Per-turn partial reports disclose the same limitation in usage and time dialogs. A complete explicit cache zero remains 0%.
+
+Regression evidence belongs to the native patch checkers, SDK/bridge usage tests, owning token folds, and assembled GUI snapshots. Actual native usage and the existing 3082 GUI require live verification independently of mocked examples or archive loader checks.

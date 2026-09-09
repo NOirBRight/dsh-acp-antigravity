@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-acp-antigravity",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "packageManager": "pnpm@10.33.0",
   "description": "Google Antigravity ACP provider for DeepSeek Harness",
   "repository": { "type": "git", "url": "https://github.com/NOirBRight/dsh-acp-antigravity.git" },
@@ -16,7 +16,7 @@
     "./client": { "types": "./dist/client-contract.d.ts", "default": "./lib/client.js" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "lib/client.js", "cordis.patch.yml", "README.md", "docs/notes", "docs/adr", "scripts/agy-usage-forwarding.patch", "scripts/check-agy-usage-patch.py", "scripts/build-agy-usage-runtime.py", "scripts/agy-subagent-ownership.patch", "scripts/check-agy-subagent-ownership.py", "LICENSE"],
+  "files": ["dist", "lib/client.js", "cordis.patch.yml", "README.md", "docs/notes", "docs/adr", "scripts/agy-usage-forwarding.patch", "scripts/check-agy-usage-patch.py", "scripts/build-agy-usage-runtime.py", "scripts/agy-subagent-ownership.patch", "scripts/check-agy-subagent-ownership.py", "scripts/agy-request-telemetry.patch", "scripts/check-agy-request-telemetry.py", "scripts/agy-user-question.patch", "scripts/check-agy-user-question.py", "LICENSE"],
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json",
@@ -72,7 +72,7 @@
     "react-dom": { "optional": true }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.1/deepseek-ai-dsh-acp-provider-0.1.1.tgz",
+    "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.2/deepseek-ai-dsh-acp-provider-0.1.2.tgz",
     "@agentclientprotocol/sdk": "0.25.1"
   },
   "devDependencies": {

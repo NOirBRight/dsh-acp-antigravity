@@ -1,11 +1,18 @@
 /** Browser-safe activity DTOs, endpoints, and decoders shared by the store and the settings RPC. */
 import { providerId, sessionId, type ExternalAgentSessionRef, type ExternalAgentFullAccessAudit } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
+import { decodeRequestTelemetry, decodeUsageSnapshots, type NativeRequestTelemetry, type NativeUsageSnapshots } from './request-telemetry.js'
 import {
+  ANTIGRAVITY_REQUEST_TELEMETRY,
+  ANTIGRAVITY_USAGE_SNAPSHOTS,
   ANTIGRAVITY_AGENT_OBSERVED,
+  ANTIGRAVITY_AGENT_TEXT,
+  ANTIGRAVITY_USER_QUESTION_ANSWER,
   ANTIGRAVITY_SESSION_READY,
   ANTIGRAVITY_TOOL_START,
   ANTIGRAVITY_TOOL_UPDATE,
+  type AntigravityAgentTextData,
+  type AntigravityUserQuestionAnswerData,
   type AntigravitySessionReadyData,
   type AntigravityToolLocation,
   isToolOwnership,
@@ -29,11 +36,15 @@ export type AntigravityFullAccessEvent = { readonly type: typeof ANTIGRAVITY_FUL
 
 /** One persisted history line with replay order and wall-clock time. */
 export type AntigravityActivityRecord =
+  | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_USAGE_SNAPSHOTS; readonly data: NativeUsageSnapshots }
+  | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_REQUEST_TELEMETRY; readonly data: NativeRequestTelemetry }
   | ({ readonly seq: number; readonly time: string } & AntigravityFullAccessEvent)
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_SESSION_READY; readonly data: AntigravitySessionReadyData }
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_TOOL_START; readonly data: AntigravityToolStartData }
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_TOOL_UPDATE; readonly data: AntigravityToolUpdateData }
   | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_AGENT_OBSERVED; readonly data: AntigravityToolOwnership }
+  | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_AGENT_TEXT; readonly data: AntigravityAgentTextData }
+  | { readonly seq: number; readonly time: string; readonly type: typeof ANTIGRAVITY_USER_QUESTION_ANSWER; readonly data: AntigravityUserQuestionAnswerData }
 
 /** History snapshot: schema version plus records in seq order. */
 export interface AntigravityActivityHistory {
@@ -116,12 +127,35 @@ function decodeRecordValue(value: unknown, seq: number): AntigravityActivityReco
   const time = value.time
   if (typeof time !== 'string' || Number.isNaN(Date.parse(time))) throw corrupt('line ' + String(seq) + ' has an invalid time')
   const type = value.type
+  if (type === ANTIGRAVITY_USAGE_SNAPSHOTS) {
+    const data = decodeUsageSnapshots(value.data)
+    if (data !== undefined) return { seq, time, type, data }
+  }
+  if (type === ANTIGRAVITY_REQUEST_TELEMETRY) {
+    const data = decodeRequestTelemetry(value.data)
+    if (data !== undefined) return { seq, time, type, data }
+  }
   if (type === ANTIGRAVITY_FULL_ACCESS_AUTHORIZED && isRecord(value.data) && stringValue(value.data.provider) !== undefined && stringValue(value.data.session) !== undefined && value.data.mode === 'full-access' && (value.data.auditId === undefined || stringValue(value.data.auditId) !== undefined)) return { seq, time, type, data: value.data as unknown as ExternalAgentFullAccessAudit }
   if (type === ANTIGRAVITY_SESSION_READY && isSessionReadyData(value.data)) return { seq, time, type, data: value.data }
   if (type === ANTIGRAVITY_TOOL_START && isToolStartData(value.data)) return { seq, time, type, data: value.data }
   if (type === ANTIGRAVITY_TOOL_UPDATE && isToolUpdateData(value.data)) return { seq, time, type, data: value.data }
   if (type === ANTIGRAVITY_AGENT_OBSERVED && isToolOwnership(value.data)) return { seq, time, type, data: value.data }
+  if (type === ANTIGRAVITY_AGENT_TEXT && isAgentTextData(value.data)) return { seq, time, type, data: value.data }
+  if (type === ANTIGRAVITY_USER_QUESTION_ANSWER && isUserQuestionAnswerData(value.data)) return { seq, time, type, data: value.data }
   throw corrupt('line ' + String(seq) + ' has an unknown type or data')
+}
+
+function isUserQuestionAnswerData(value: unknown): value is AntigravityUserQuestionAnswerData {
+  if (!isRecord(value) || stringValue(value.requestId) === undefined || typeof value.question !== 'string') return false
+  if (!Array.isArray(value.selected) || value.selected.some(item => typeof item !== 'string')) return false
+  return value.custom === undefined || typeof value.custom === 'string'
+}
+
+function isAgentTextData(value: unknown): value is AntigravityAgentTextData {
+  if (!isRecord(value) || stringValue(value.trajectoryId) === undefined) return false
+  if (value.parentTrajectoryId !== undefined && stringValue(value.parentTrajectoryId) === undefined) return false
+  if (value.kind !== 'text' && value.kind !== 'thought') return false
+  return typeof value.text === 'string' && value.text.length > 0
 }
 
 function isSessionReadyData(value: unknown): value is AntigravitySessionReadyData {

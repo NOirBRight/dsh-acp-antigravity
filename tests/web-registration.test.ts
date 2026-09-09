@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { apply, inject } from '../src/web/index.ts'
 import { nativeTurnDefinition } from '../src/web/native-turn.ts'
+import { decodeSnapshot } from '../src/client-contract.ts'
 
 // Registration is tested here; actual browser-only cards are exercised by the 3082 E2E.
 vi.mock('../src/web/NativeTurnContainer.tsx', () => ({ NativeTurnContainer: () => null }))
@@ -37,6 +38,20 @@ function registrationBench() {
 }
 
 describe('client plugin composition', () => {
+  it('retains the advanced discovery timeout across an ordinary settings edit', async () => {
+    const { entries, rpcCall } = registrationBench()
+    const face = entries[0]?.spec.inject?.()
+    if (typeof face?.load !== 'function' || typeof face.save !== 'function') throw new Error('missing settings face')
+    const row = { provider: 'antigravity', instanceId: 'default', title: 'Antigravity', enabled: true, executablePath: '/agy', harnessPath: '/harness', stateDirectory: '/profile', models: [], installed: true, authenticated: true, live: false, ready: true, modelDiscoveryTimeoutMs: 45_000 }
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { title: 'External Agents', rows: [row] } })
+    const loaded = decodeSnapshot(await face.load())
+    expect(loaded?.rows[0]?.modelDiscoveryTimeoutMs).toBe(45_000)
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { saved: true } })
+    await face.save({ ...loaded!.rows[0]!, enabled: false })
+    expect(rpcCall).toHaveBeenLastCalledWith(expect.any(String), 'save', expect.objectContaining({ enabled: false, modelDiscoveryTimeoutMs: 45_000 }), undefined)
+    expect(decodeSnapshot({ title: 'External Agents', rows: [{ ...row, modelDiscoveryTimeoutMs: 0 }] })).toBeUndefined()
+  })
+
   it('keeps native activity out of the conversation tab list', () => {
     const { entries } = registrationBench()
     expect(entries.map(({ spec }) => spec.name)).toEqual(['settings.provider.item', 'conversation.chat.node'])

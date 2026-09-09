@@ -23,7 +23,7 @@ describe('DSH settings plugin', () => {
       effect: (fn: () => unknown) => fn(),
       connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
     }
-    await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
+    await apply(ctx, { executablePath: '', harnessPath: '', enabled: true, modelDiscoveryTimeoutMs: 45_000 })
     const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)
     expect(handler).toEqual(expect.any(Function))
     const result = await handler!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
@@ -31,7 +31,7 @@ describe('DSH settings plugin', () => {
     const snapshot = decodeSnapshot(result.value)
     expect(snapshot?.title).toBe('External Agents')
     expect(snapshot?.rows).toHaveLength(1)
-    expect(snapshot?.rows[0]).toMatchObject({ title: 'Antigravity', enabled: true, installed: false })
+    expect(snapshot?.rows[0]).toMatchObject({ title: 'Antigravity', enabled: true, installed: false, modelDiscoveryTimeoutMs: 45_000 })
     const catalog = await handler!(CATALOG_ENDPOINT, {}) as { ok: boolean; value: { groups: unknown[] } }
     expect(catalog.ok).toBe(true)
     expect(catalog.value.groups).toEqual([])

@@ -54,9 +54,11 @@ async function handleInteractionQuestion(host: ExternalAgentTurnHost, params: un
   if (answer.answers.length !== 1) return { outcome: { outcome: 'cancelled' } }
   const exact = options.find(option => option.native === answer.answers[0])
   const matchingLabels = options.filter((_option, index) => request.options?.[index] === answer.answers[0])
-  const selected = exact ?? (matchingLabels.length === 1 ? matchingLabels[0] : undefined)
-  if (selected === undefined) throw new Error('Antigravity user question answer is unavailable')
-  return { outcome: { outcome: 'selected', optionId: selected.native } }
+  const selected = answer.custom === undefined ? exact ?? (matchingLabels.length === 1 ? matchingLabels[0] : undefined) : undefined
+  if (selected !== undefined) return { outcome: { outcome: 'selected', optionId: selected.native } }
+  if (!isRecord(params._meta) || params._meta['agy.supportsFreeform'] !== true) throw new Error('This native runtime does not support custom question answers')
+  // Native SDK maps Other text through cancelled + freeform metadata; no offered option was selected.
+  return { outcome: { outcome: 'cancelled' }, _meta: { 'agy.freeformResponse': answer.custom ?? answer.answers[0] } }
 }
 
 async function handlePermission(host: ExternalAgentTurnHost, params: unknown, id: string): Promise<unknown> {

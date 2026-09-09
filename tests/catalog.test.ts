@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from '../src/catalog.js'
+import { collapseAntigravityModels, effortVariants, nativeAntigravityModelId, peelEffort } from '../src/catalog.js'
 
 describe('Antigravity catalog collapse', () => {
   it('peels high/medium/low into one logical id', () => {
@@ -31,6 +31,14 @@ describe('Antigravity catalog collapse', () => {
     expect(collapsed.map(model => model.id)).toEqual(['gemini-3.1-pro'])
     expect(collapsed[0]?.name).toBe('Gemini 3.1 Pro')
     expect(collapsed[0]?.reasoning?.efforts.map(effort => effort.id)).toEqual(['default', 'high'])
+    expect(collapsed[0]?.reasoning?.defaultEffort).toBe('high')
+  })
+
+
+  it('maps high without a native catalog onto the suffixed ACP id', () => {
+    expect(nativeAntigravityModelId('gemini-3.8-flash', 'high', [])).toBe('gemini-3.8-flash-high')
+    const collapsed = collapseAntigravityModels(effortVariants('gemini-3.8-flash'))
+    expect(collapsed[0]?.reasoning?.efforts.map(effort => effort.id)).toEqual(['default', 'high', 'medium', 'low'])
     expect(collapsed[0]?.reasoning?.defaultEffort).toBe('high')
   })
 

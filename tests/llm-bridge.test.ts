@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acpPrompt, createAntigravityLlmBridge, lastUserText, looksLikePlan } from '../src/llm-bridge.js'
+import { acpPrompt, createAntigravityLlmBridge, lastUserText } from '../src/llm-bridge.js'
 import { optionId, type ExternalAgentPermissionRequest } from '@deepseek-ai/dsh-acp-provider'
 import type { AntigravitySandboxPolicy } from '../src/llm-bridge.js'
 import { ExternalAgentProviderRegistry, providerId } from '@deepseek-ai/dsh-acp-provider'
@@ -12,7 +12,6 @@ describe('Antigravity LLM bridge', () => {
       { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'do it' }] },
       { role: 'user', source: { kind: 'skill-invocation', name: 'plan', form: 'instructions' }, content: [{ type: 'text', text: 'SKILL BODY' }] },
     ])).toBe('SKILL BODY' + String.fromCharCode(10) + String.fromCharCode(10) + 'do it')
-    expect(looksLikePlan('# Ship it\n1. a')).toBe(true)
     expect(lastUserText([
       { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
@@ -21,6 +20,70 @@ describe('Antigravity LLM bridge', () => {
       { role: 'user', source: { kind: 'skill-catalog' }, content: [{ type: 'text', text: 'available skills' }] },
       { role: 'user', source: { kind: 'plugin', plugin: 'dsh-system-prompt', form: 'snapshot' }, content: [{ type: 'text', text: 'sandbox policy' }] },
     ])).toBe('你是什么模型')
+  })
+
+  it.each([
+    { text: '# 计算的演化史与智能基础设施的未来构建', enabled: false, progress: false },
+    { text: 'Proceed and plan.md are ordinary article text.', enabled: false, progress: false },
+    { text: 'An ordinary result', enabled: false, progress: true },
+    { text: 'A draft without markdown headings', enabled: true, progress: false },
+  ])('uses session plan state, not output or tool hints: $text', async ({ text, enabled, progress }) => {
+    const prompts: string[] = []
+    let reviews = 0
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined,
+        runTurn: async (request: { prompt: string }, host: { publish: (event: Record<string, unknown>) => Promise<void> }) => {
+          prompts.push(request.prompt)
+          if (progress) await host.publish({ type: 'plan-update', summary: 'Progress only', steps: ['Write article'] })
+          await host.publish({ type: 'assistant-delta', text })
+          return { status: 'completed', text }
+        },
+      }),
+    }, undefined, undefined, {
+      isPlanMode: id => { expect(id).toBe('session-1'); return enabled },
+      ask: async () => { reviews++; return { answers: [{ id: 'plan-review', selected: ['Approve'] }] } },
+    })
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1',
+      messages: [{ role: 'user', source: { kind: 'user' }, content: '输出2000字，随便什么内容，我来测试tps' },
+        { role: 'user', source: { kind: 'plugin', plugin: 'not-a-plan-mode' }, content: 'Not authoritative' }],
+      tools: [{ name: 'exit_plan_mode' }],
+    })) void chunk
+    expect(reviews).toBe(enabled ? 1 : 0)
+    expect(prompts).toEqual(enabled
+      ? ['输出2000字，随便什么内容，我来测试tps', 'The user approved the plan. Carry it out now.']
+      : ['输出2000字，随便什么内容，我来测试tps'])
+    await adapter.dispose()
+  })
+
+  it('awaits an in-flight native catalog before resolving effort variants', async () => {
+    let resolveList!: (models: { id: string; name: string }[]) => void
+    const listed = new Promise<{ id: string; name: string }[]>(resolve => { resolveList = resolve })
+    let cached: { id: string; name: string }[] = []
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => listed,
+      openSession: async () => ({ ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined, runTurn: async () => ({ status: 'completed', text: '' }) }),
+    }, () => cached, next => { cached = [...next] })
+    const pending = adapter.resolveModel('antigravity', 'gemini-3.8-flash-high')
+    resolveList([{ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High' }, { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash Low' }])
+    await expect(pending).resolves.toMatchObject({ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash High' })
+    await adapter.dispose()
+  })
+
+  it('fails loudly when the native catalog is empty', async () => {
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [],
+      openSession: async () => ({ ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined, runTurn: async () => ({ status: 'completed', text: '' }) }),
+    })
+    await expect(adapter.resolveModel('antigravity', 'gemini-3.8-flash-high')).rejects.toThrow('Antigravity model catalog is unavailable')
+    await adapter.dispose()
   })
 
   it('streams ACP assistant deltas as LLM text chunks', async () => {
@@ -102,8 +165,10 @@ describe('Antigravity LLM bridge', () => {
       chunks.push(chunk as { type: string; usage?: { inputTokens?: number; outputTokens?: number } })
     }
     const usages = chunks.filter(chunk => chunk.type === 'usage')
-    expect(usages).toHaveLength(1)
-    expect(usages[0]?.usage).toMatchObject({ inputTokens: 11, outputTokens: 7 })
+    expect(usages).toHaveLength(2)
+    expect(usages[0]?.usage).toMatchObject({ inputTokens: 11, outputTokens: 7, usageComplete: false })
+    expect(usages[1]?.usage).toMatchObject({ inputTokens: 11, outputTokens: 7 })
+    expect(usages[1]?.usage).not.toHaveProperty('usageComplete')
   })
 
   it('emits no usage without a provider-reported source', async () => {
@@ -162,12 +227,13 @@ describe('Antigravity LLM bridge', () => {
   })
 
   it('exposes the full staging LlmAdapter surface including prepareCall', async () => {
-    const adapter = bridgeWithStubProvider(undefined)
+    const adapter = bridgeWithStubProvider({ listModels: async () => [validListModel()] })
     for (const method of ['providerInfo', 'providerRetryPolicy', 'imageRequestPricing', 'listModels', 'resolveModel', 'prepareCall', 'stream'] as const) {
       expect(typeof adapter[method]).toBe('function')
     }
-    const prepared = await adapter.prepareCall('antigravity', 'gemini-3.8-flash')
-    expect(prepared.model).toEqual({ provider: 'antigravity', id: 'gemini-3.8-flash', name: 'gemini-3.8-flash' })
+    const prepared = await adapter.prepareCall('antigravity', 'gemini')
+    expect(prepared.model).toMatchObject({ provider: 'antigravity', id: 'gemini', name: 'Gemini' })
+    expect(prepared.model.reasoning).toBeUndefined()
     expect(typeof prepared.stream).toBe('function')
     expect(adapter.providerRetryPolicy('antigravity')).toEqual({ mode: 'normal', maxRetries: 0, retryableCodes: [], initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 })
   })
@@ -403,6 +469,104 @@ describe('Antigravity LLM bridge', () => {
     expect(decisions).toEqual([{ kind: 'reject', optionId: 'o9' }])
   })
 
+  it('logs custom answers before delivery and preserves literal label or id collisions', async () => {
+    const captured: unknown[] = []
+    const recorded: unknown[] = []
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(),
+        supportedModes: [...VALID_MODES],
+        runTurn: async (_turn: unknown, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[] }) => Promise<unknown> }) => {
+          await turnHost.publish({ type: 'assistant-delta', text: 'done' })
+          captured.push(await turnHost.requestUserInput({
+            requestId: optionId('q-label'),
+            question: 'Pick one',
+            options: ['Yes', 'No'],
+          }))
+          captured.push(await turnHost.requestUserInput({
+            requestId: optionId('native-1'),
+            question: 'Pick one',
+            options: ['Allow', 'Deny'],
+          }))
+          captured.push(await turnHost.requestUserInput({ requestId: optionId('empty-custom'), question: 'Pick one', options: ['Yes'] }))
+          expect(recorded).toHaveLength(3)
+          await expect(turnHost.requestUserInput({ requestId: optionId('failed-write'), question: 'Pick one' })).rejects.toThrow('storage unavailable')
+          return { status: 'completed', text: 'done' }
+        },
+        dispose: async () => undefined,
+      }),
+    } as never, undefined, undefined, {
+      appendToolEvents: (session, events) => {
+        expect(session).toBe('session-1')
+        for (const event of events) {
+          if (event.type !== 'antigravity/user-question-answer') continue
+          if (event.data.requestId === 'failed-write') throw new Error('storage unavailable')
+          recorded.push(event.data)
+        }
+      },
+      ask: async request => {
+        const id = request.questions[0]?.id ?? ''
+        if (id === 'empty-custom') return { answers: [{ id, selected: ['Yes'], custom: '' }] }
+        if (id === 'q-label') return { answers: [{ id, selected: [], custom: 'Yes' }] }
+        return { answers: [{ id, selected: [], custom: 'native-1' }] }
+      },
+    })
+    const messages = [{ role: 'user', source: { kind: 'user' }, content: 'go' }]
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages })) void chunk
+    expect(captured).toEqual([
+      { answers: ['Yes'], custom: 'Yes' },
+      { answers: ['native-1'], custom: 'native-1' },
+      { answers: ['Yes'] },
+    ])
+    expect(recorded).toEqual([
+      { requestId: 'q-label', question: 'Pick one', selected: [], custom: 'Yes' },
+      { requestId: 'native-1', question: 'Pick one', selected: [], custom: 'native-1' },
+      { requestId: 'empty-custom', question: 'Pick one', selected: ['Yes'], custom: '' },
+    ])
+  })
+
+  it('keeps mixed selection and custom and forwards multiple as multiSelect', async () => {
+    const captured: unknown[] = []
+    let seenAsk: unknown
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(),
+        supportedModes: [...VALID_MODES],
+        runTurn: async (_turn: unknown, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[]; multiple?: boolean }) => Promise<unknown> }) => {
+          await turnHost.publish({ type: 'assistant-delta', text: 'done' })
+          captured.push(await turnHost.requestUserInput({
+            requestId: optionId('q-mix'),
+            question: 'Choose',
+            options: ['Red', 'Blue'],
+            multiple: true,
+          }))
+          return { status: 'completed', text: 'done' }
+        },
+        dispose: async () => undefined,
+      }),
+    } as never, undefined, undefined, {
+      ask: async request => {
+        seenAsk = request.questions[0]
+        return { answers: [{ id: 'q-mix', selected: ['Red'], custom: '1' }] }
+      },
+    })
+    const messages = [{ role: 'user', source: { kind: 'user' }, content: 'go' }]
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages })) void chunk
+    expect(captured).toEqual([{ answers: ['Red', '1'], custom: '1' }])
+    expect(seenAsk).toMatchObject({
+      id: 'q-mix',
+      question: 'Choose',
+      multiSelect: true,
+      options: [{ label: 'Red' }, { label: 'Blue' }],
+    })
+  })
+
   it('follows host policy changes on a reused native session', async () => {
     const modes: unknown[] = []
     let opens = 0
@@ -482,5 +646,17 @@ describe('Antigravity LLM bridge', () => {
       })()).rejects.toThrow('native exploded')
     }
     expect(opens).toBe(2)
+  })
+
+  it('does not block the picker catalog on a hanging native listModels', async () => {
+    let settle!: (models: readonly never[]) => void
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      listModels: () => new Promise(resolve => { settle = resolve }),
+      openSession: async () => { throw new Error('unused') },
+    } as never)
+    const listed = await adapter.listModels('antigravity')
+    expect(listed).toEqual([])
+    settle([])
   })
 })

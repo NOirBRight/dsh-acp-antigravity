@@ -46,13 +46,13 @@ function onlyPrompted(prompted: readonly string[]): string {
 describe('Antigravity bridge fail-closed terminal mapping', () => {
   it('ends a failed native turn with finish error, never stop, usage, or plan review', async () => {
     const harness = makeAntigravityHarness({ promptResponse: { stopReason: 'error' } })
+    harness.store.host.isPlanMode = () => true
     try {
       const chunks = await collectStream(harness.bridge.stream({
         provider: 'antigravity',
         model: 'gemini-pro',
         sessionId: 'e2e-failed',
         messages: [userMessage('go')],
-        tools: [{ name: 'exit_plan_mode' }],
       }))
       const finish = finishOf(chunks)
       expect(chunks.filter(isFinishChunk)).toHaveLength(1)

@@ -80,6 +80,7 @@ export function apply(ctx: ClientContext): void {
       stateDirectory: row.stateDirectory,
       instanceId: row.instanceId,
       ...(row.model === undefined ? {} : { model: row.model }),
+      ...(row.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: row.modelDiscoveryTimeoutMs }),
       enabled: row.enabled,
     }, undefined)
     if (!result.ok) throw new Error(result.error.message)

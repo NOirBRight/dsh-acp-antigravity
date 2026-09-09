@@ -16,6 +16,7 @@ import {
 import { redactAntigravityText } from './auth.js'
 import { encodeAntigravityCursor } from './cursor.js'
 import { acpUsage } from './usage.js'
+import { decodeRequestTelemetry, decodeUsageSnapshots, type AntigravityUsageEvent } from './request-telemetry.js'
 import { errorMessage, isRecord, stringValue } from './decode.js'
 import { createAntigravityInteractionHandler } from './interaction.js'
 import { mapPermissionMode, normalizeAntigravitySessionUpdate } from './mapping.js'
@@ -143,7 +144,11 @@ function responseFailure(response: unknown): string | undefined {
 
 async function publishUsage(response: unknown, host: ExternalAgentTurnHost): Promise<void> {
   const usage = acpUsage(isRecord(response) ? response.usage : undefined)
-  if (usage !== undefined) await host.publish({ type: 'usage', ...usage })
+  const requestTelemetry = decodeRequestTelemetry(isRecord(response) && isRecord(response._meta) ? response._meta['agy.requestTelemetry'] : undefined)
+  const usageSnapshots = decodeUsageSnapshots(isRecord(response) && isRecord(response._meta) ? response._meta['agy.usageSnapshots'] : undefined)
+  if (usage === undefined && requestTelemetry === undefined && usageSnapshots === undefined) return
+  const event: AntigravityUsageEvent = { type: 'usage', ...usage, ...(requestTelemetry === undefined ? {} : { requestTelemetry }), ...(usageSnapshots === undefined ? {} : { usageSnapshots }) }
+  await host.publish(event)
 }
 
 function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === 'AbortError' }

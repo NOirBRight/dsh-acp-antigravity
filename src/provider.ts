@@ -50,6 +50,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
     for (const [name, value] of [['maxEventTextBytes', config.maxEventTextBytes], ['maxEventPayloadBytes', config.maxEventPayloadBytes], ['cancelGraceMs', config.cancelGraceMs]] as const) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new RangeError(name + ' must be a positive safe integer')
     }
+    if (config.modelDiscoveryTimeoutMs !== undefined && (!Number.isInteger(config.modelDiscoveryTimeoutMs) || config.modelDiscoveryTimeoutMs < 1 || config.modelDiscoveryTimeoutMs > 0xffffffff)) throw new RangeError('modelDiscoveryTimeoutMs must be an integer from 1 to 4294967295')
     this.profileDirectory = resolveAntigravityProfileDirectory(config.stateDirectory, config.instanceId)
     const providerName = config.instanceId === 'default' ? 'antigravity' : 'antigravity:' + config.instanceId
     this.info = { id: providerId(providerName), name: 'Antigravity', description: 'Google Antigravity ACP external agent' }
@@ -64,13 +65,15 @@ export class AntigravityProvider implements ExternalAgentProvider {
   /** Discover account-visible models through ACP session configuration. */
   async listModels(signal?: AbortSignal): Promise<readonly ExternalAgentModel[]> {
     this.assertActive()
+    const timeout = AbortSignal.timeout(this.config.modelDiscoveryTimeoutMs ?? 30_000)
+    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     const cwd = this.workingDirectory()
     let connection: AcpConnection | undefined
     try {
-      connection = await this.openConnection(cwd, signal)
-      const response = await connection.request('session/new', { cwd, mcpServers: [] }, signal)
+      connection = await this.openConnection(cwd, combined)
+      const response = await connection.request('session/new', { cwd, mcpServers: [] }, combined)
       const models = modelsFromSessionResponse(response)
-      await closeNativeSession(connection, response, signal)
+      await closeNativeSession(connection, response, combined)
       this.assertActive()
       this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: this.config.model ?? ANTIGRAVITY_DEFAULT_MODEL }
       return models

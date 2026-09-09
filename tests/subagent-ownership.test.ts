@@ -9,8 +9,10 @@ import { decodeActivityHistory } from '../src/activity-contract.js'
 import { normalizeAntigravitySessionUpdate } from '../src/mapping.js'
 import {
   ANTIGRAVITY_AGENT_OBSERVED,
+  ANTIGRAVITY_AGENT_TEXT,
   ANTIGRAVITY_SESSION_READY,
   ANTIGRAVITY_TOOL_START,
+  ANTIGRAVITY_TOOL_UPDATE,
   foldAntigravityToolEvent,
   isToolOwnership,
   toDurableAgentEvents,
@@ -81,7 +83,7 @@ describe('ownership through normalize and durable events', () => {
     const seen = new Set<string>()
     const first = toDurableToolEvents({ toolId: 'c-1', name: 'run_command', status: 'running', ownership: CHILD }, seen)
     expect(first[0]).toMatchObject({ type: ANTIGRAVITY_TOOL_START, data: { ownership: CHILD } })
-    for (const event of first) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of first) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const second = toDurableToolEvents({ toolId: 'c-1', name: 'run_command', status: 'completed', ownership: CHILD }, seen)
     expect(second).toHaveLength(1)
     expect(second[0]).toMatchObject({ data: { ownership: CHILD, status: 'completed' } })
@@ -90,7 +92,7 @@ describe('ownership through normalize and durable events', () => {
   it('retains start ownership across updates that close the row without linkage', () => {
     const seen = new Set<string>()
     const first = toDurableToolEvents({ toolId: 'p-1', name: 'read', status: 'running', ownership: ROOT }, seen)
-    for (const event of first) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of first) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const sweep = toDurableToolEvents({ toolId: 'p-1', name: 'read', status: 'failed' }, seen)
     const state = [...first, ...sweep].reduce(foldAntigravityToolEvent, undefined)
     expect(state).toMatchObject({ toolId: 'p-1', status: 'failed', ownership: ROOT })
@@ -99,7 +101,7 @@ describe('ownership through normalize and durable events', () => {
   it('adopts ownership when the execution update reconciles a bare permission start', () => {
     const seen = new Set<string>()
     const start = toDurableToolEvents({ toolId: 'frame-1', name: 'read', status: 'pending' }, seen)
-    for (const event of start) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of start) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const exec = toDurableToolEvents({ toolId: 'frame-1', name: 'read', status: 'running', ownership: ROOT }, seen)
     const state = [...start, ...exec].reduce(foldAntigravityToolEvent, undefined)
     expect(state).toMatchObject({ toolId: 'frame-1', status: 'running', ownership: ROOT })
@@ -119,7 +121,7 @@ describe('ownership through normalize and durable events', () => {
   it('never equates launch completion with child success', () => {
     const seen = new Set<string>()
     const launch = toDurableToolEvents({ toolId: 'launch-1', name: 'start_subagent', status: 'running', ownership: ROOT }, seen)
-    for (const event of launch) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of launch) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const launched = toDurableToolEvents({ toolId: 'launch-1', name: 'start_subagent', status: 'completed', ownership: ROOT }, seen)
     const childEvents = toDurableToolEvents({ toolId: 'c-9', name: 'run_command', status: 'running', ownership: CHILD }, new Set())
     const launchState = [...launch, ...launched].reduce(foldAntigravityToolEvent, undefined)
@@ -194,6 +196,12 @@ describe('agent descriptors through the activity contract', () => {
     expect(decodeActivityHistory(wire).records).toEqual([{ seq: 1, time, type: ANTIGRAVITY_AGENT_OBSERVED, data: CHILD }])
   })
 
+  it('round-trips child text records', () => {
+    const time = new Date().toISOString()
+    const wire = { version: 1, records: [{ seq: 1, time, v: 1, type: ANTIGRAVITY_AGENT_TEXT, data: { trajectoryId: 'child-9', parentTrajectoryId: 'main', kind: 'text', text: 'child says hi' } }] }
+    expect(decodeActivityHistory(wire).records).toEqual([{ seq: 1, time, type: ANTIGRAVITY_AGENT_TEXT, data: { trajectoryId: 'child-9', parentTrajectoryId: 'main', kind: 'text', text: 'child says hi' } }])
+  })
+
   it('rejects corrupt descriptor linkage', () => {
     const time = new Date().toISOString()
     const bad = { version: 1, records: [{ seq: 1, time, v: 1, type: ANTIGRAVITY_AGENT_OBSERVED, data: { trajectoryId: '' } }] }
@@ -202,7 +210,7 @@ describe('agent descriptors through the activity contract', () => {
 })
 
 describe('zero-tool child provider to real sidecar regression', () => {
-  it('discovers a text-only child once across turns without tool rows or stored text', async () => {
+  it('keeps child text off the parent stream and stores it on the sidecar', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agy-agent-'))
     try {
       const store = new AntigravityActivityStore(root)
@@ -238,14 +246,15 @@ describe('zero-tool child provider to real sidecar regression', () => {
         }
         return text
       }
-      expect(await streamOnce()).toBe('child says hi')
-      expect(await streamOnce()).toBe('child says hi')
+      expect(await streamOnce()).toBe('')
+      expect(await streamOnce()).toBe('')
       const history = store.read('session-agent-1')
       const descriptors = history.records.filter(record => record.type === ANTIGRAVITY_AGENT_OBSERVED)
       expect(descriptors).toHaveLength(1)
       expect(descriptors[0]).toMatchObject({ data: CHILD })
       expect(history.records.some(record => record.type === ANTIGRAVITY_TOOL_START)).toBe(false)
-      expect(JSON.stringify(history.records)).not.toContain('still thinking')
+      const texts = history.records.filter(record => record.type === ANTIGRAVITY_AGENT_TEXT)
+      expect(texts.map(record => record.data.text)).toEqual(['child thinking', 'still thinking', 'child says hi', 'child thinking', 'still thinking', 'child says hi'])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

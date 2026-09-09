@@ -1,83 +1,18 @@
-# OPT-IN patch: forward fully-known native token counters on PromptResponse.
-#
-# Target (pinned, verified byte-identical in archive and extraction):
-#   agy_acp_server_20260818_01_RC01
-#   google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py
-# Applies ONLY to the final prompt() return path. Early returns (logout,
-# cancelled, errors) intentionally omit partial telemetry: counters may be
-# incomplete there, and partial usage is never forwarded.
-# Archive builds must regenerate matching checked-hash Python 3.14 bytecode
-# alongside server.py and verify loading with the native executable.
 --- server.py
 +++ server.py
-@@ -1345,6 +1345,82 @@
+@@ -1269,6 +1269,7 @@
+   agent: sdk_agent_module.Agent
+   stack: contextlib.AsyncExitStack
+   cwd: str = ""
++  usage_epoch_is_fresh: bool = False
+   gemini_home: str = ""
+   # The harness `app_data_dir` this agent was built with; anchors
+   # `_is_internal_mcp_schema_read` even if `GEMINI_HOME` changes mid-process.
+@@ -1345,6 +1346,114 @@
    return "end_turn"
  
  
 +_MAX_SAFE_INTEGER = 2**53 - 1
-+
-+
-+def _prompt_token_usage(response):
-+  """Builds schema.Usage from SDK UsageMetadata, or None when unusable.
-+
-+  Uses the module-global schema import. Mapping (ACP UNSTABLE
-+  Usage): inputTokens takes prompt_token_count; outputTokens takes
-+  candidates_token_count ONLY - thinking tokens are excluded from
-+  outputTokens and ride thoughtTokens separately (thoughts_token_count),
-+  so downstream can tell inclusive from exclusive totals by total equality.
-+  totalTokens takes total_token_count. cachedReadTokens takes
-+  cached_content_token_count when present; the SDK reports no cached-write
-+  counter, so cachedWriteTokens is never set and no value is synthesized.
-+  A field the SDK left as None is omitted (thoughts and cached only);
-+  totals then validate against the matching convention (with or without
-+  thoughts). Anything missing or invalid beyond that, a total matching
-+  neither convention, or a cached count exceeding prompt input yields None
-+  (absent), never zero-filled. Counters above 2**53 - 1 are rejected so
-+  values stay lossless through JSON/JS. Zeros the backend explicitly
-+  reported stay zeros.
-+  """
-+  if response is None:
-+    return None
-+  try:
-+    usage = response.usage_metadata
-+  except Exception:
-+    return None
-+  if usage is None:
-+    return None
-+  try:
-+    prompt = usage.prompt_token_count
-+    candidates = usage.candidates_token_count
-+    thoughts = usage.thoughts_token_count
-+    total = usage.total_token_count
-+    cached = usage.cached_content_token_count
-+  except Exception:
-+    return None
-+  for value in (prompt, candidates, total):
-+    if not _is_usage_count(value):
-+      return None
-+  if thoughts is None:
-+    if total != prompt + candidates:
-+      return None
-+  else:
-+    if not _is_usage_count(thoughts):
-+      return None
-+    if total != prompt + candidates + thoughts:
-+      return None
-+  kwargs = {
-+      "input_tokens": prompt,
-+      "output_tokens": candidates,
-+      "total_tokens": total,
-+  }
-+  if thoughts is not None:
-+    kwargs["thought_tokens"] = thoughts
-+  if cached is not None:
-+    if not _is_usage_count(cached) or cached > prompt:
-+      return None
-+    kwargs["cached_read_tokens"] = cached
-+  try:
-+    return schema.Usage(**kwargs)
-+  except Exception:
-+    return None
 +
 +
 +def _is_usage_count(value):
@@ -90,18 +25,169 @@
 +  )
 +
 +
++def _usage_field(usage, name):
++  if usage is None:
++    return None
++  try:
++    return getattr(usage, name)
++  except Exception:
++    return None
++
++
++def _count_delta(end, start, new_epoch):
++  """Turn delta for one counter. Missing fields stay missing; they are never zero-filled."""
++  if end is None:
++    return None
++  if not _is_usage_count(end):
++    return None
++  if start is None:
++    return end if new_epoch else None
++  if not _is_usage_count(start):
++    return None
++  delta = end - start
++  return delta if _is_usage_count(delta) else None
++
++
++def _cumulative_usage(agent):
++  try:
++    return agent.conversation.total_usage
++  except Exception:
++    return None
++
++
++def _usage_snapshot(usage):
++  """Raw SDK counters before subtraction; absent fields stay null."""
++  if usage is None:
++    return None
++  return {name: _usage_field(usage, name) for name in (
++      "prompt_token_count", "candidates_token_count", "thoughts_token_count",
++      "total_token_count", "cached_content_token_count")}
++
++
++def _prompt_token_usage(end, start=None, new_epoch=False):
++  """Builds schema.Usage from cumulative SDK snapshots, or None when unusable.
++
++  Uses the module-global schema import. Mapping (ACP UNSTABLE Usage):
++  SDK prompt_token_count and total_token_count exclude cache. ACP
++  inputTokens and totalTokens add the cached_content_token_count delta
++  so the existing adapter can subtract cachedReadTokens. outputTokens
++  takes the candidates_token_count delta ONLY; thinking tokens ride
++  thoughtTokens. The cache counter is required to form that aggregate;
++  a missing cache field cannot be treated as zero. Only a session
++  created by new_session has a known zero baseline before its first
++  attempt. Restored or retried sessions require explicit baseline
++  counters. Zeros the backend explicitly reported stay zeros. Rewinding
++  counters yield None (absent), never a fake zero. Cache may exceed
++  uncached prompt.
++  """
++  if end is None:
++    return None
++  prompt = _count_delta(_usage_field(end, "prompt_token_count"), _usage_field(start, "prompt_token_count"), new_epoch)
++  candidates = _count_delta(_usage_field(end, "candidates_token_count"), _usage_field(start, "candidates_token_count"), new_epoch)
++  total = _count_delta(_usage_field(end, "total_token_count"), _usage_field(start, "total_token_count"), new_epoch)
++  thoughts = _count_delta(_usage_field(end, "thoughts_token_count"), _usage_field(start, "thoughts_token_count"), new_epoch)
++  end_cached = _usage_field(end, "cached_content_token_count")
++  start_cached = _usage_field(start, "cached_content_token_count")
++  if end_cached is not None and not _is_usage_count(end_cached):
++    return None
++  if start_cached is not None and not _is_usage_count(start_cached):
++    return None
++  if end_cached is not None and start_cached is not None and end_cached < start_cached:
++    return None
++  cached = _count_delta(end_cached, start_cached, new_epoch)
++  if prompt is None or candidates is None or total is None or cached is None:
++    return None
++  if thoughts is None:
++    if total != prompt + candidates:
++      return None
++  elif total != prompt + candidates + thoughts:
++    return None
++  input_tokens = prompt + cached
++  total_tokens = total + cached
++  if not _is_usage_count(input_tokens) or not _is_usage_count(total_tokens):
++    return None
++  kwargs = {
++      "input_tokens": input_tokens,
++      "output_tokens": candidates,
++      "total_tokens": total_tokens,
++      "cached_read_tokens": cached,
++  }
++  if thoughts is not None:
++    kwargs["thought_tokens"] = thoughts
++  try:
++    return schema.Usage(**kwargs)
++  except Exception:
++    return None
++
++
  class AgyAdapter(Agent):
  
    """Antigravity ACP Server Adapter."""
-@@ -4428,7 +4504,10 @@
+@@ -2782,6 +2891,7 @@
+         pass
+       raise e
+ 
++    self._sessions[session_id].usage_epoch_is_fresh = True
+     session_store.write_sidecar_metadata(session_id, {"cwd": cwd})
+ 
+     self._schedule_available_commands(session_id)
+@@ -4256,6 +4366,8 @@
+     chat_prompt = _parse_prompt(prompt)
+ 
+     response = None
++    start_usage = None
++    fresh_epoch = False
+     # Tool calls announced to the client as "in_progress" that have not yet been
+     # closed with a terminal tool_call_update, keyed by tool_call_id. Every
+     # opened tool call must be closed, otherwise the client shows it spinning
+@@ -4282,6 +4394,9 @@
+       rebuilt_once = False
+       while True:
+         try:
++          fresh_epoch = session_data.usage_epoch_is_fresh
++          session_data.usage_epoch_is_fresh = False
++          start_usage = _cumulative_usage(agent)
+           response = await agent.chat(chat_prompt)
+           # Drive the ACP lifecycle from the step stream rather than
+           # ``response.chunks``: the chunk stream only yields
+@@ -4380,7 +4495,17 @@
+           )
+         except ConnectionError:
+           logging.exception("Failed to send SDK cancel message to client.")
+-      return schema.PromptResponse(stop_reason="cancelled")
++      end_usage = _cumulative_usage(agent)
++      return schema.PromptResponse(stop_reason="cancelled", usage=None, field_meta={
++          "agy.usageSnapshots": {
++              "version": 1, "provenance": "sdk-cumulative",
++              "promptId": self._prompt_ids[session_id],
++              "sessionKey": session_store.SESSION_FILE_PREFIX + session_id,
++              "baseline": "fresh-session" if fresh_epoch else "cumulative",
++              "completed": False,
++              "start": _usage_snapshot(start_usage), "end": _usage_snapshot(end_usage),
++          },
++      })
+     except (
+         sdk_types_module.AntigravityExecutionError,
+         sdk_types_module.AntigravityConnectionError,
+@@ -4428,7 +4553,20 @@
      if response:
        stop_reason = _to_acp_stop_reason(getattr(response, "stop_reason", None))
  
 -    return schema.PromptResponse(stop_reason=stop_reason)
-+    return schema.PromptResponse(
-+        stop_reason=stop_reason,
-+        usage=_prompt_token_usage(response) if unclosed_status == "completed" else None,
-+    )
++    usage = None
++    end_usage = _cumulative_usage(agent)
++    if unclosed_status == "completed":
++      usage = _prompt_token_usage(end_usage, start_usage, fresh_epoch)
++    return schema.PromptResponse(stop_reason=stop_reason, usage=usage, field_meta={
++        "agy.usageSnapshots": {
++            "version": 1, "provenance": "sdk-cumulative",
++            "promptId": self._prompt_ids[session_id],
++            "sessionKey": session_store.SESSION_FILE_PREFIX + session_id,
++            "baseline": "fresh-session" if fresh_epoch else "cumulative",
++            "completed": unclosed_status == "completed",
++            "start": _usage_snapshot(start_usage), "end": _usage_snapshot(end_usage),
++        },
++    })
  
    async def _send_connection_lost_message(
        self, session_id: str, error: Exception

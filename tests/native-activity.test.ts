@@ -11,11 +11,14 @@ import {
   ANTIGRAVITY_SESSION_READY,
   ANTIGRAVITY_TOOL_START,
   ANTIGRAVITY_TOOL_UPDATE,
+  ANTIGRAVITY_USER_QUESTION_ANSWER,
   type AntigravityToolStatus,
 } from '../src/tool-events.js'
 import { foldActivityRecords, loadActivityHistory, type AntigravityToolRowData } from '../src/web/native-activity.js'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { AntigravityToolNode } from '../src/web/AntigravityToolNode.js'
+import { NativeActivityNode } from '../src/web/NativeActivityNode.js'
+import { groupNativeActivity } from '../src/web/native-tree.js'
 import { en } from '../src/web/locales.js'
 
 const cardProps = vi.hoisted(() => [] as Record<string, unknown>[])
@@ -32,6 +35,12 @@ vi.mock('@deepseek-ai/dsh-client-ui-tool/client', () => ({
   },
   // @ts-expect-error: three-argument virtual mock until the stand-in is deleted.
 }), { virtual: true })
+
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  DisclosureRow: (props: { title?: string, collapsedContent?: unknown, children?: unknown }) =>
+    createElement('div', { 'data-disclosure': props.title }, props.collapsedContent as never, props.children as never),
+  IconAgentPresetOutline16: () => null,
+}))
 
 const T0 = '2026-09-07T03:38:25.046Z'
 const T1 = '2026-09-07T03:38:27.884Z'
@@ -88,6 +97,15 @@ function node(row: AntigravityToolRowData, translate: TranslateNS<'conversation'
 }
 
 describe('Antigravity native activity fold', () => {
+  it('does not fold user-question answers into tool rows', () => {
+    const rows = foldActivityRecords([
+      ready(1, T0),
+      { seq: 2, time: T0, type: ANTIGRAVITY_USER_QUESTION_ANSWER, data: { requestId: 'q-1', question: 'Pick one', selected: [], custom: 'OTHER_9f6b2c' } },
+      start(3, T1, 't-1', 'ls'),
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ key: '3', state: { toolId: 't-1' } })
+  })
   it('defers unowned permission previews without hiding owned pending tools or final failures', () => {
     const pending: AntigravityActivityRecord = { seq: 1, time: T0, type: ANTIGRAVITY_TOOL_START, data: { toolId: 'child', name: 'printf ALPHA', status: 'pending' } }
     const ownership = { trajectoryId: 'alpha', parentTrajectoryId: 'root' }
@@ -304,5 +322,24 @@ describe('Antigravity tool row renderer', () => {
         content: [{ type: 'text', text: 'page' }],
       },
     })
+  })
+
+  it('renders a dedicated empty child panel without claiming unknown status', () => {
+    const branches = groupNativeActivity([], [{
+      key: '1', epoch: 1, firstSeenAt: T0,
+      ownership: { trajectoryId: 'ec725c19-66d3-48e1-b35f-fa0fe5453fb7', parentTrajectoryId: 'root' },
+    }])
+    const markup = renderToStaticMarkup(createElement(NativeActivityNode, {
+      branch: branches[0]!,
+      t: (key: keyof typeof en) => en[key],
+      conversationT: conversationT as TranslateNS<'conversation'>,
+    }))
+    expect(markup).toContain('data-native-subagent-panel')
+    expect(markup).toContain('data-state="running"')
+    expect(markup).toContain('Subagent ec725c19')
+    expect(markup).toContain(en.activityRunning.replace('{count}', '1'))
+    expect(markup).toContain(en.activityChildEmpty)
+    expect(markup).not.toContain(en.activityChildUnknown)
+    expect(markup).not.toMatch(/0 native tools/)
   })
 })

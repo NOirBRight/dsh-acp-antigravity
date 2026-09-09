@@ -45,7 +45,7 @@ describe('ACP tool activity durable event family', () => {
   it('adds a completion-only path to an existing tool row', () => {
     const seen = new Set<string>()
     const start = toDurableToolEvents({ toolId: 'tool-late', name: 'read', status: 'running' }, seen)
-    for (const event of start) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of start) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const completed = toDurableToolEvents({
       toolId: 'tool-late', name: 'read', status: 'completed', output: '{\"workingDir\":\"/workspace/src\"}',
     }, seen)
@@ -76,7 +76,7 @@ describe('ACP tool activity durable event family', () => {
   it('folds replayably without scanning the transcript window', () => {
     const seen = new Set<string>()
     const start = toDurableToolEvents({ toolId: 'tool-9', name: 'bash', status: 'running', input: 'ls' }, seen)
-    for (const event of start) if (event.type !== ANTIGRAVITY_AGENT_OBSERVED) seen.add(event.data.toolId)
+    for (const event of start) if (event.type === ANTIGRAVITY_TOOL_START || event.type === ANTIGRAVITY_TOOL_UPDATE) seen.add(event.data.toolId)
     const end = toDurableToolEvents({ toolId: 'tool-9', name: 'bash', status: 'failed', error: 'boom' }, seen)
     const viaReplace = [...start, ...end].reduce(foldAntigravityToolEvent, undefined)
     const tailOnly = [...end].reduce(foldAntigravityToolEvent, undefined)

@@ -10,6 +10,7 @@ import {
 import { isRecord, stringValue } from './decode.js'
 import { toolOwnershipOf, withToolOwnership } from './tool-events.js'
 import { acpUsage } from './usage.js'
+import { decodeRequestTelemetry, decodeUsageSnapshots, type AntigravityUsageEvent } from './request-telemetry.js'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PERMISSION_MODES,
@@ -122,6 +123,13 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
   if (tag === 'usage_update' || tag === 'usage') {
     const usage = acpUsage(update)
     return usage === undefined ? null : { type: 'usage', ...usage }
+  }
+  if (tag === 'session_info_update' && isRecord(update._meta) && ('agy.requestTelemetry' in update._meta || 'agy.usageSnapshots' in update._meta)) {
+    const requestTelemetry = decodeRequestTelemetry(update._meta['agy.requestTelemetry'])
+    const usageSnapshots = decodeUsageSnapshots(update._meta['agy.usageSnapshots'])
+    if (requestTelemetry === undefined && usageSnapshots === undefined) return null
+    const event: AntigravityUsageEvent = { type: 'usage', ...(requestTelemetry === undefined ? {} : { requestTelemetry }), ...(usageSnapshots === undefined ? {} : { usageSnapshots }) }
+    return boundExternalAgentEvent(event, bounds)
   }
   if (tag === 'current_mode_update' || tag === 'config_option_update' || tag === 'session_info_update') return { type: 'notice', level: 'info', message: 'Antigravity session configuration updated' }
   if (tag === 'user_message_chunk') return null

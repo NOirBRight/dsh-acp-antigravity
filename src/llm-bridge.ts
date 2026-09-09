@@ -11,14 +11,15 @@ import {
   type ExternalAgentProvider,
   type ExternalAgentSessionRef,
   type ExternalAgentTurnResult,
+  type ExternalAgentUserInputAnswers,
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
 import type { StreamChunk, TokenUsage, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
 import { isRecord } from './decode.js'
 import { reportedUsage, sumTurnUsage } from './usage.js'
-import { GenerationTimer } from './generation-timer.js'
-import { ANTIGRAVITY_AGENT_OBSERVED, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
+import { decodeRequestTelemetry, decodeUsageSnapshots, requestThroughput, sdkUsage, type RequestThroughput } from './request-telemetry.js'
+import { ANTIGRAVITY_USER_QUESTION_ANSWER, ANTIGRAVITY_USAGE_SNAPSHOTS, ANTIGRAVITY_REQUEST_TELEMETRY, ANTIGRAVITY_AGENT_OBSERVED, ANTIGRAVITY_AGENT_TEXT, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
 
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
@@ -30,6 +31,7 @@ export interface BridgeAskRequest {
     question: string
     detail?: string
     options?: { label: string; description?: string }[]
+    multiSelect?: boolean
     intent?: { kind: 'plan-review'; approve: string }
   }[]
   signal?: AbortSignal
@@ -37,6 +39,8 @@ export interface BridgeAskRequest {
 }
 
 export interface BridgeHost {
+  /** Read the exact session’s current DSH Plan flag; absent state never authorizes plan review. */
+  isPlanMode?(sessionId: string | undefined): boolean
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
   appendSessionReady?(sessionId: string | undefined, ref: ExternalAgentSessionRef): void
   loadSession?(sessionId: string): ExternalAgentSessionRef | undefined
@@ -98,16 +102,6 @@ export function acpPrompt(messages: readonly unknown[]): string {
   return skill + String.fromCharCode(10) + String.fromCharCode(10) + user
 }
 
-export function inPlanMode(messages: readonly unknown[], tools?: readonly { name?: string }[]): boolean {
-  if (tools?.some(tool => tool.name === 'exit_plan_mode')) return true
-  return messages.some(message => isRecord(message) && isRecord(message.source) && typeof message.source.plugin === 'string' && message.source.plugin.includes('plan'))
-}
-
-export function looksLikePlan(text: string): boolean {
-  const heading = text.split(String.fromCharCode(10)).some(line => line.startsWith('# ') && line.length > 2)
-  return heading || text.includes('plan.md') || text.includes('Proceed')
-}
-
 function formatPlanUpdate(event: { summary: string; steps: readonly string[] }): string {
   const lines = [event.summary, ...event.steps.map(step => '- ' + step)]
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10)
@@ -144,8 +138,8 @@ export function createAntigravityLlmBridge(
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy
   imageRequestPricing(_provider: string, _model: string): undefined
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
-  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<{ provider: string; id: string; name: string }>
-  prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: { provider: string; id: string; name: string }; stream: (options: StreamOptions) => AsyncIterable<Chunk> }>
+  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<{ provider: string } & ReturnType<typeof collapseAntigravityModels>[number]>
+  prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: { provider: string } & ReturnType<typeof collapseAntigravityModels>[number]; stream: (options: StreamOptions) => AsyncIterable<Chunk> }>
   stream(options: StreamOptions): AsyncIterable<Chunk>
   reset(): Promise<void>
   release(session: string): Promise<void>
@@ -163,19 +157,22 @@ export function createAntigravityLlmBridge(
       observedAgentTrajectories.delete(ref.session)
     },
   })
-  async function nativeModels(): Promise<readonly { id: string; name: string }[]> {
+  let listing: Promise<readonly { id: string; name: string }[]> | undefined
+  /** Cached native catalog. `wait` is for resolve/stream; picker `listModels` must not wait. */
+  function nativeModels(wait: boolean): Promise<readonly { id: string; name: string }[]> {
     const cached = getCachedModels?.() ?? []
-    if (cached.length > 0) return cached
+    if (cached.length > 0) return Promise.resolve(cached)
     const installed = getProvider()
-    if (installed === undefined) return []
-    try {
-      const listed = await installed.listModels()
-      const models = listed.map(model => ({ id: String(model.id), name: model.name }))
-      setCachedModels?.(models)
-      return models
-    } catch {
-      return []
-    }
+    if (installed === undefined) return Promise.resolve([])
+    listing ??= installed.listModels()
+      .then(listed => {
+        const models = listed.map(model => ({ id: String(model.id), name: model.name }))
+        setCachedModels?.(models)
+        return models
+      })
+      .catch(() => []) // Native discovery failure: empty catalog, resolve/stream fail loudly.
+      .finally(() => { listing = undefined })
+    return wait ? listing : Promise.resolve([])
   }
   return {
     async reset() { await runner.reset(); emittedToolIds.clear(); observedAgentTrajectories.clear() },
@@ -186,13 +183,17 @@ export function createAntigravityLlmBridge(
     providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 0, retryableCodes: [], initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 }),
     imageRequestPricing: () => undefined,
     listModels: async provider => {
-      const native = await nativeModels()
+      const native = await nativeModels(false)
       return collapseAntigravityModels(native).map(model => ({ provider, ...model }))
     },
     resolveModel: async (provider, model) => {
-      const collapsed = collapseAntigravityModels(await nativeModels())
+      const natives = await nativeModels(true)
+      const collapsed = collapseAntigravityModels(natives)
       const found = collapsed.find(item => item.id === model) ?? collapsed.find(item => item.id === peelEffort(model).logical)
-      if (found === undefined) return { provider, id: model, name: model }
+      if (found === undefined) {
+        if (natives.length === 0) throw new Error('Antigravity model catalog is unavailable')
+        throw new Error('Unknown Antigravity model: ' + model)
+      }
       return { provider, ...found }
     },
     async prepareCall(provider, model, signal) {
@@ -216,7 +217,8 @@ export function createAntigravityLlmBridge(
       const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal])
       const policy = hostAsk?.resolvePolicy?.(options.sessionId)
       const permissionMode = policy?.mode === 'danger-full-access' ? 'full-access' : policy?.mode === 'workspace-write' ? 'auto-accept-edits' : 'approval-required'
-      const natives = await nativeModels()
+      const natives = await nativeModels(true)
+      if (natives.length === 0) throw new Error('Antigravity model catalog is unavailable')
       const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id), natives)
       const workspaceRoot = policy?.workspaceRoot
       if (getProvider() !== installed) throw new Error('Antigravity configuration changed before native execution')
@@ -228,12 +230,20 @@ export function createAntigravityLlmBridge(
         ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
         signal,
       } as const
-      type Pending = { kind: 'thought' | 'text'; text: string }
+      type Pending = { kind: 'thought' | 'text'; text: string } | { kind: 'usage'; usage: TokenUsage }
       const pending: Pending[] = []
-      const timer = new GenerationTimer()
       let latestUsage: TokenUsage | undefined
-      let multipleNativeTurns = false
-      let sawPlan = false
+      let usageBase: TokenUsage | undefined
+      const requestSamples = new Map<string, RequestThroughput>()
+      const withRequestMetrics = (usage: TokenUsage): TokenUsage => {
+        const matched = [...requestSamples.values()].reduce((sum, sample) => ({
+          outputTokens: sum.outputTokens + sample.outputTokens,
+          elapsedMs: sum.elapsedMs + sample.elapsedMs,
+          requestCount: sum.requestCount + sample.requestCount,
+        }), { outputTokens: 0, elapsedMs: 0, requestCount: 0 })
+        const measurable = matched.requestCount > 0 && Number.isSafeInteger(matched.outputTokens) && Number.isFinite(matched.elapsedMs)
+        return { ...usage, generationElapsedMs: null, ...(measurable ? { requestThroughput: matched } : {}) }
+      }
       let wake: (() => void) | undefined
       const push = (kind: 'thought' | 'text', text: string): void => {
         if (text.length === 0) return
@@ -243,6 +253,10 @@ export function createAntigravityLlmBridge(
       // Disclose a child trajectory once per native session from its first owned
       // text/thought linkage. Scoped like emittedToolIds and reset on native open,
       // so a restarted native session discloses its trajectories again. No text stored.
+      const childOwned = (carrier: AntigravityOwnedEvent): boolean => {
+        const ownership = carrier.ownership
+        return ownership !== undefined && ownership.parentTrajectoryId !== undefined && ownership.trajectoryId !== ownership.parentTrajectoryId
+      }
       const observeAgent = (carrier: AntigravityOwnedEvent): void => {
         const seen = observedAgentTrajectories.get(key) ?? new Set<string>()
         observedAgentTrajectories.set(key, seen)
@@ -253,9 +267,20 @@ export function createAntigravityLlmBridge(
       }
       const turnHost = createExternalAgentTurnHost(signal, {
         publish: event => {
-          timer.observe(event, performance.now())
-          if (event.type === 'thought-delta') { push('thought', event.text); observeAgent(event) }
-          else if (event.type === 'assistant-delta') { push('text', event.text); observeAgent(event) }
+          if (event.type === 'thought-delta' || event.type === 'assistant-delta') {
+            observeAgent(event)
+            if (childOwned(event) && event.ownership !== undefined) {
+              if (event.text.length === 0) return
+              hostAsk?.appendToolEvents?.(options.sessionId, [{ type: ANTIGRAVITY_AGENT_TEXT, data: {
+                trajectoryId: event.ownership.trajectoryId,
+                ...(event.ownership.parentTrajectoryId === undefined ? {} : { parentTrajectoryId: event.ownership.parentTrajectoryId }),
+                kind: event.type === 'thought-delta' ? 'thought' : 'text',
+                text: event.text.length > 4000 ? event.text.slice(0, 4000) : event.text,
+              } }])
+              return
+            }
+            push(event.type === 'thought-delta' ? 'thought' : 'text', event.text)
+          }
           else if (event.type === 'tool-activity') {
             const seen = emittedToolIds.get(key) ?? new Set<string>()
             emittedToolIds.set(key, seen)
@@ -264,11 +289,28 @@ export function createAntigravityLlmBridge(
             hostAsk?.appendToolEvents?.(options.sessionId, events)
           }
           else if (event.type === 'plan-update') {
-            sawPlan = true
             push('text', formatPlanUpdate(event))
           } else if (event.type === 'usage') {
+            const snapshots = decodeUsageSnapshots('usageSnapshots' in event ? event.usageSnapshots : undefined)
+            if (snapshots !== undefined) hostAsk?.appendToolEvents?.(options.sessionId, [{ type: ANTIGRAVITY_USAGE_SNAPSHOTS, data: snapshots }])
+            const telemetry = decodeRequestTelemetry('requestTelemetry' in event ? event.requestTelemetry : undefined)
+            if (telemetry !== undefined) {
+              // ponytail: cumulative bags cost O(n²) history bytes per prompt; store request deltas if long loops make this material.
+              hostAsk?.appendToolEvents?.(options.sessionId, [{ type: ANTIGRAVITY_REQUEST_TELEMETRY, data: telemetry }])
+              const sample = requestThroughput(telemetry)
+              const identity = telemetry.sessionKey + '\n' + telemetry.promptId
+              if (sample === undefined) requestSamples.delete(identity)
+              else requestSamples.set(identity, sample)
+            }
             // Native updates are cumulative within a prompt; only its last valid snapshot is counted.
-            latestUsage = reportedUsage(event) ?? latestUsage
+            const observed = reportedUsage(event) ?? sdkUsage(snapshots)
+            if (observed !== undefined) latestUsage = observed
+            else if (snapshots !== undefined && latestUsage !== undefined) latestUsage = { ...latestUsage, usageComplete: false }
+            const usage = usageBase === undefined ? latestUsage : sumTurnUsage(usageBase, latestUsage)
+            if (usage !== undefined) {
+              pending.push({ kind: 'usage', usage: withRequestMetrics({ ...usage, usageComplete: false }) })
+              wake?.()
+            }
           }
         },
         requestPermission: request => decidePermission(request, permissionMode, hostAsk, signal, options.sessionId),
@@ -284,6 +326,10 @@ export function createAntigravityLlmBridge(
           }
           const item = pending.shift()
           if (item === undefined) break
+          if (item.kind === 'usage') {
+            yield { type: 'usage', usage: item.usage }
+            continue
+          }
           if (item.kind === 'thought') {
             if (!thoughtOpen) {
               yield { type: 'block-start', index: 0, blockType: 'reasoning' }
@@ -316,15 +362,16 @@ export function createAntigravityLlmBridge(
         let finalError = result.error
         let finalUsage = result.status === 'completed' ? latestUsage : undefined
         let assembled = state.text.length > 0 ? state.text : result.text
-        if (result.status === 'completed' && inPlanMode(options.messages, options.tools) && (sawPlan || looksLikePlan(assembled)) && hostAsk?.ask !== undefined) {
+        if (result.status === 'completed' && hostAsk?.isPlanMode?.(options.sessionId) === true && hostAsk.ask !== undefined) {
           let approved = false
           try {
             approved = await reviewPlan(assembled, hostAsk, signal, options.sessionId)
           } catch {
+            // Review channel abort or host failure must not execute the plan.
             approved = false
           }
           if (approved) {
-            multipleNativeTurns = true
+            usageBase = finalUsage
             latestUsage = undefined
             const second = run('The user approved the plan. Carry it out now.')
             state = yield* drain(second, state)
@@ -341,8 +388,7 @@ export function createAntigravityLlmBridge(
           yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
         }
         if (finalUsage !== undefined) {
-          const usage = { ...finalUsage, generationElapsedMs: multipleNativeTurns ? null : timer.elapsedMs() }
-          yield { type: 'usage', usage }
+          yield { type: 'usage', usage: withRequestMetrics(finalUsage) }
         }
         yield { type: 'finish', reason: finalStatus === 'cancelled'
           ? { kind: 'aborted', failure: { code: 'ABORTED', message: 'Native turn cancelled' } }
@@ -386,6 +432,7 @@ async function decidePermission(
       ...(signal === undefined ? {} : { signal }),
     })
   } catch {
+    // A throwing approval service cannot grant; native permission stays rejected.
     return rejectOf()
   }
   if (outcome === 'allowed-once') {
@@ -404,7 +451,7 @@ async function decideUserInput(
   hostAsk: BridgeHost | undefined,
   signal?: AbortSignal,
   sessionId?: string,
-): Promise<{ answers: string[] }> {
+): Promise<ExternalAgentUserInputAnswers> {
   if (hostAsk?.ask === undefined) return { answers: [] }
   const options = request.options?.map(label => ({ label }))
   const result = await hostAsk.ask({
@@ -412,15 +459,19 @@ async function decideUserInput(
       id: String(request.requestId),
       question: request.question,
       ...(options === undefined ? {} : { options }),
+      ...(request.multiple === undefined ? {} : { multiSelect: request.multiple }),
     }],
     ...(signal === undefined ? {} : { signal }),
     ...(sessionId === undefined ? {} : { sessionId }),
   })
   const item = result.answers[0]
   if (item === undefined) return { answers: [] }
-  if (item.selected.length > 0) return { answers: item.selected }
-  if (item.custom !== undefined && item.custom.length > 0) return { answers: [item.custom] }
-  return { answers: [] }
+  hostAsk.appendToolEvents?.(sessionId, [{ type: ANTIGRAVITY_USER_QUESTION_ANSWER, data: {
+    requestId: String(request.requestId), question: request.question, selected: [...item.selected],
+    ...(item.custom === undefined ? {} : { custom: item.custom }),
+  } }])
+  if (item.custom !== undefined && item.custom.length > 0) return { answers: [...item.selected, item.custom], custom: item.custom }
+  return { answers: item.selected }
 }
 
 async function reviewPlan(plan: string, hostAsk: BridgeHost, signal?: AbortSignal, sessionId?: string): Promise<boolean> {

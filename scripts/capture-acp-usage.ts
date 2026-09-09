@@ -23,6 +23,7 @@
 // strings stay raw (never coerced). No normalizer changes here.
 import { closeSync, constants, mkdirSync, openSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { redactAntigravityText } from '../src/auth.js'
 import { readFile } from 'node:fs/promises'
 import { providerInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { spawnAntigravityAcp, type AcpWireObserver } from '../src/protocol.js'
@@ -143,16 +144,17 @@ async function capture(fd: number, spec: AntigravityLaunchSpec, config: LabConfi
   const raw: string[] = [];
   const updates: unknown[] = [];
   let promptResult: unknown;
+  const diagnostics: string[] = [];
   let sawPromptError = false;
   let reason = '';
   const observer: AcpWireObserver = {
     onRawLine: line => { raw.push(line) },
     onSessionUpdate: params => { updates.push(params) },
     onPromptResult: result => { promptResult = result },
-    onPromptError: () => { sawPromptError = true },
+    onPromptError: error => { sawPromptError = true; diagnostics.push(redactAntigravityText(JSON.stringify(error))) },
   };
   const signal = AbortSignal.timeout(timeoutMs);
-  const connection = spawnAntigravityAcp(spec, { observer });
+  const connection = spawnAntigravityAcp(spec, { observer, onStderr: line => { diagnostics.push(line) } });
   let sessionId = '';
   try {
     await connection.request('initialize', { protocolVersion: 1 }, signal);
@@ -162,6 +164,7 @@ async function capture(fd: number, spec: AntigravityLaunchSpec, config: LabConfi
       promptResult = await connection.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: config.turn.prompt }] }, signal);
     } catch (error) {
       sawPromptError = true;
+      diagnostics.push(redactAntigravityText(String(error)));
       reason = errorCategory(error);
     }
   } catch (error) {
@@ -199,6 +202,7 @@ async function capture(fd: number, spec: AntigravityLaunchSpec, config: LabConfi
     status: turn.status,
     ...(turn.status === 'complete' ? {} : { reason: turn.reason }),
     frames,
+    diagnostics,
     promptResult: {
       raw: rawResultValue ?? null,
       decoded: promptResult ?? null,

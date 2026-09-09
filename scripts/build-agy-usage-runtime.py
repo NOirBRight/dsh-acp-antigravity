@@ -18,6 +18,7 @@ anything (O_EXCL).
 
   python3 scripts/build-agy-usage-runtime.py --par <stock.par> --out <new.par>
   python3 scripts/build-agy-usage-runtime.py --par <stock.par> --out <ui.par> --ownership-only
+  python3 scripts/build-agy-usage-runtime.py --par <stock.par> --out <q.par> --question-patch
   python3 scripts/build-agy-usage-runtime.py --par <stock.par> --out <probe.par> \
       --sentinel AGY_USAGE_PROBE_SENTINEL   # probe only, proves loader reads it
 """
@@ -39,6 +40,8 @@ from pathlib import Path
 BASE = "google3/cloud/developer_experience/antigravity_extensions/acp_server/"
 PY = BASE + "server.py"
 PYC = BASE + "__pycache__/server.cpython-314.pyc"
+HOOKS_PY = BASE + "hooks.py"
+HOOKS_PYC = BASE + "__pycache__/hooks.cpython-314.pyc"
 HERE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
 CHECKED = py_compile.PycInvalidationMode.CHECKED_HASH
@@ -85,12 +88,16 @@ ap.add_argument("--par", required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--patch")
 ap.add_argument("--ownership-only", action="store_true", help="forward trajectory metadata without changing token reporting")
+ap.add_argument("--question-patch", nargs="?", const=str(HERE / "agy-user-question.patch"), default=None,
+                help="also apply the multi-file question freeform patch (server.py+hooks.py)")
 ap.add_argument("--sentinel", default=None, help="probe only: top-level SystemExit marker")
 args = ap.parse_args()
 args.patch = args.patch or str(HERE / ("agy-subagent-ownership.patch" if args.ownership_only else "agy-usage-forwarding.patch"))
 checker = "check-agy-subagent-ownership.py" if args.ownership_only else "check-agy-usage-patch.py"
 marker = "_with_trajectory_meta" if args.ownership_only else "_prompt_token_usage"
 par, out = Path(args.par), Path(args.out)
+if args.question_patch and args.sentinel:
+    sys.exit("refusing: --question-patch cannot combine with --sentinel")
 if par.resolve() == out.resolve():
     sys.exit("refusing: --out is the source archive")
 if out.exists():
@@ -98,9 +105,15 @@ if out.exists():
 
 subprocess.run([sys.executable, str(HERE / checker),
                 "--par", str(par), "--patch", args.patch], check=True)
+if args.question_patch:
+    subprocess.run([sys.executable, str(HERE / "check-agy-user-question.py"),
+                    "--par", str(par), "--patch", args.question_patch], check=True)
 
 with zipfile.ZipFile(par) as src:
     orig_py, orig_pyc = src.read(PY), src.read(PYC)
+    orig_hooks_py = orig_hooks_pyc = None
+    if args.question_patch:
+        orig_hooks_py, orig_hooks_pyc = src.read(HOOKS_PY), src.read(HOOKS_PYC)
     min_off = min(i.header_offset for i in src.infolist())
     n_entries = len(src.infolist())
 if orig_pyc[:4] != importlib.util.MAGIC_NUMBER:
@@ -108,14 +121,29 @@ if orig_pyc[:4] != importlib.util.MAGIC_NUMBER:
 dfile = marshal.loads(orig_pyc[16:]).co_filename  # e.g. cloud/.../server.py
 if not dfile.endswith("server.py"):
     sys.exit(f"unexpected co_filename: {dfile!r}")
+hooks_dfile = None
+if orig_hooks_pyc is not None:
+    if orig_hooks_pyc[:4] != importlib.util.MAGIC_NUMBER:
+        sys.exit("hooks pyc magic drift: archive needs a different Python")
+    hooks_dfile = marshal.loads(orig_hooks_pyc[16:]).co_filename
+    if not hooks_dfile.endswith("hooks.py"):
+        sys.exit(f"unexpected hooks co_filename: {hooks_dfile!r}")
 mode = stat.S_IMODE(os.stat(par).st_mode)
 
 
-def _compile(data):
+def _code_names(code):
+    names = set(code.co_names)
+    for const in code.co_consts:
+        if hasattr(const, "co_names"):
+            names |= _code_names(const)
+    return names
+
+
+def _compile(data, dfile=dfile, basename="server.py"):
     with tempfile.TemporaryDirectory() as td:
-        target = Path(td) / "server.py"
+        target = Path(td) / basename
         target.write_bytes(data)
-        pyc_file = Path(td) / "server.pyc"
+        pyc_file = Path(td) / (Path(basename).stem + ".pyc")
         py_compile.compile(str(target), cfile=str(pyc_file), dfile=dfile,
                            invalidation_mode=CHECKED)
         return pyc_file.read_bytes()
@@ -123,6 +151,8 @@ def _compile(data):
 
 if _compile(orig_py) != orig_pyc:
     sys.exit("compiler roundtrip failed: toolchain differs from stock build")
+if orig_hooks_py is not None and _compile(orig_hooks_py, hooks_dfile, "hooks.py") != orig_hooks_pyc:
+    sys.exit("hooks compiler roundtrip failed: toolchain differs from stock build")
 
 with tempfile.TemporaryDirectory() as td:
     td = Path(td)
@@ -133,12 +163,32 @@ with tempfile.TemporaryDirectory() as td:
                        input=Path(args.patch).read_bytes(), check=True, cwd=td)
     except FileNotFoundError:
         sys.exit("`patch` binary not installed")
+    if args.question_patch:
+        (td / "hooks.py").write_bytes(orig_hooks_py)
+        subprocess.run(["patch", "-p0", "--batch", "--fuzz=0"],
+                       input=Path(args.question_patch).read_bytes(), check=True, cwd=td)
     patched = target.read_bytes()
     if args.sentinel:
         patched = f"raise SystemExit({args.sentinel!r})\n".encode() + patched
     new_pyc = _compile(patched)
     if new_pyc[:8] != orig_pyc[:8]:
         sys.exit("pyc header drift (magic/flags)")
+    replacements = {PY: patched, PYC: new_pyc}
+    if args.question_patch:
+        hooks_patched = (td / "hooks.py").read_bytes()
+        hooks_pyc = _compile(hooks_patched, hooks_dfile, "hooks.py")
+        if hooks_pyc[:8] != orig_hooks_pyc[:8]:
+            sys.exit("hooks pyc header drift (magic/flags)")
+        if b"agy.supportsFreeform" not in patched:
+            sys.exit("question marker missing from server.py")
+        if b"_agy_question_freeform" not in patched:
+            sys.exit("question helper missing from server.py")
+        if "_agy_question_freeform" not in _code_names(marshal.loads(new_pyc[16:])):
+            sys.exit("server pyc/source mismatch")
+        if b"selected_option_ids or []" not in hooks_patched:
+            sys.exit("question marker missing from hooks.py")
+        replacements[HOOKS_PY] = hooks_patched
+        replacements[HOOKS_PYC] = hooks_pyc
     if not args.sentinel:
         if args.ownership_only and b"_prompt_token_usage" in patched:
             sys.exit("ownership-only build must not introduce token reporting")
@@ -158,7 +208,7 @@ with tempfile.TemporaryDirectory() as td:
             zi.external_attr = info.external_attr
             zi.create_system = info.create_system
             zi.create_version = info.create_version
-            data = patched if info.filename == PY else new_pyc if info.filename == PYC else None
+            data = replacements.get(info.filename)
             if data is not None:
                 with dst.open(zi, "w") as w:
                     w.write(data)
@@ -183,6 +233,11 @@ with tempfile.TemporaryDirectory() as td:
                 shutil.copyfileobj(z, f, CHUNK)
         _fix_par_data_size(out, os.path.getsize(par), min_off)
         os.chmod(out, mode)
+        if args.question_patch:
+            with zipfile.ZipFile(out) as packed:
+                for name, data in replacements.items():
+                    if packed.read(name) != data:
+                        sys.exit(f"archive member drift: {name}")
     except BaseException:
         if owned:
             try:
@@ -191,5 +246,6 @@ with tempfile.TemporaryDirectory() as td:
                 pass
         raise
 
+replaced = " + ".join(name for name in (PY, PYC, HOOKS_PY, HOOKS_PYC) if name in replacements)
 print(f"wrote {out} ({out.stat().st_size} bytes, bootstrap {min_off}, "
-      f"{n_entries} entries, replaced {PY} + {PYC})")
+      f"{n_entries} entries, replaced {replaced})")

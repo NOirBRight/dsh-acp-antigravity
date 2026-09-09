@@ -31,7 +31,7 @@ Which of LLM route or native agent is running this DSH session. Shown as a group
 _Avoid_: Provider, Engine, Backend
 
 **Runtime lock**:
-After the first successful ACP open in a DSH session, other Model Switch groups are disabled (composer picker and DSH subagent route in Model Switch). Models and High/Low inside Antigravity stay allowed. A failed turn keeps the lock. A new DSH session unlocks. This does not constrain the native agent's own subagent picker.
+A submitted prompt reserves the selected runtime immediately (composer submitting, pending first turn, or running), before native startup or response text. Native Antigravity keeps its models and High/Low; DSH keeps LLM-provider choices and disables Agent providers. After the first successful ACP open, the native binding is the durable lock: other Model Switch groups stay disabled even after a failed turn. Cancel or fail without a native binding releases the activity reservation; existing DSH history still cannot convert onto Antigravity. A new DSH session unlocks. This does not constrain the native agent's own subagent picker.
 _Avoid_: Per-turn lock, hide groups, locking ACP nested agents
 
 **Enabled catalog**:

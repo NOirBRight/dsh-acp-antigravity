@@ -51,7 +51,7 @@ describe('Antigravity native turn definition', () => {
     expect(nativeTurnDefinition.target).toBe('chat')
     expect(nativeTurnDefinition.match(turnStart(10, 1000, 3))).toEqual({ id: '3', role: 'start' })
     expect(nativeTurnDefinition.match(turnEnd(20, 2000, 3))).toEqual({ id: '3', role: 'update' })
-    expect(nativeTurnDefinition.match(stepStart(11, 1100, 3))).toBeNull()
+    expect(nativeTurnDefinition.match(stepStart(11, 1100, 3))).toEqual({ id: '3', role: 'update' })
   })
 
   it('opens a window on start and closes it on end', () => {
@@ -118,6 +118,27 @@ describe('Antigravity native turn definition', () => {
   it('publishes immediately so the open turn stays live', () => {
     const event = turnStart(10, 1000, 3)
     expect(nativeTurnDefinition.publication?.({ event, role: 'start', location: { kind: 'unresolved' } })).toBe('immediate')
+  })
+
+
+  it('freezes the stream anchor on the first assistant chunk, not the final message', () => {
+    const start = turnStart(10, 1000, 3)
+    const step = stepStart(11, 1100, 3)
+    const chunk = { type: 'assistant/chunk', seq: SessionSeq(12), time: 1200, data: { turn: 3 } } as const
+    const later = { type: 'assistant/chunk', seq: SessionSeq(18), time: 1800, data: { turn: 3 } } as const
+    const message = { type: 'assistant/message', seq: SessionSeq(20), time: 2000, data: { turn: 3 } } as const
+    const loc = { kind: 'unresolved' as const }
+    const ctx = {
+      ...context({ turn: 3, startMs: 1000, endMs: 2000 }, 10),
+      matches: [
+        { event: start, role: 'start' as const, location: loc },
+        { event: step, role: 'update' as const, location: loc },
+        { event: chunk, role: 'update' as const, location: loc },
+        { event: later, role: 'update' as const, location: loc },
+        { event: message, role: 'update' as const, location: loc },
+      ],
+    }
+    expect(nativeTurnDefinition.buildViewNode?.(ctx)).toMatchObject({ anchorSeq: 12 })
   })
 
   it('builds one chat node anchored at the turn start', () => {

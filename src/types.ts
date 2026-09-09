@@ -42,6 +42,8 @@ export interface AntigravityInstallationConfig {
 /** Provider configuration for one independently mounted instance. */
 export interface AntigravityProviderConfig extends AntigravityInstallationConfig {
   readonly authMethod?: AntigravityAuthMethod
+  /** Deadline for native initialization, OAuth and model discovery; defaults to 30 seconds. */
+  readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly clientName?: string
   readonly clientVersion?: string
@@ -73,6 +75,8 @@ export interface AntigravityHealth {
   readonly status: AntigravityStatus
   readonly message?: string
   readonly version?: string
+  /** Deadline for native initialization, OAuth and model discovery; defaults to 30 seconds. */
+  readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly profileDirectory: string
 }

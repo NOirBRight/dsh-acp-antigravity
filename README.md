@@ -9,7 +9,7 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 The ACP library is pinned to its versioned GitHub release. Install the shared Provider UI and the read-only tool-card compatibility artifact alongside this bundle; no sibling checkout is required. The tool-card artifact is an explicitly versioned, unofficial additive build of DSH rc.1, not an npm release by the upstream project.
 
 ```sh
-dsh plugin --profile web add https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.2/deepseek-ai-dsh-acp-antigravity-0.1.2.tgz
+dsh plugin --profile web add https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.3/deepseek-ai-dsh-acp-antigravity-0.1.3.tgz
 ```
 
 For source verification with the published dependency pins:
@@ -27,7 +27,7 @@ pnpm run build
 
 The adapter retains provider-reported reasoning, cache and total counters. DSH output includes reasoning exactly once; input excludes separately reported cache reads and writes. When ACP reports thought tokens separately, its total must establish whether output already includes them. Incomplete, unsafe or inconsistent samples are omitted, not estimated from text or filled with zeros.
 
-The pinned `agy_acp_server_20260818_01_RC01` SDK has real turn usage, but its stock ACP server does not return it. The opt-in source patch in `scripts/agy-usage-forwarding.patch` forwards complete final-turn counters. Building this plugin alone does not enable native telemetry; a native runtime that emits usage is also required. Cancellation and error paths do not promise partial usage. The optional runtime builder applies the patch and regenerates the bundled checked-hash `server.cpython-314.pyc` with a matching Python 3.14 compiler. It preserves the ELF executable and ZIP layout, updates the payload-size metadata, and refuses existing output paths. The rebuilt ACP server still needs compatible `localharness_external` and normal authentication; the builder does not configure a profile or replace a runtime.
+The pinned `agy_acp_server_20260818_01_RC01` SDK has real turn usage, but its stock ACP server does not return it. The opt-in source patch in `scripts/agy-usage-forwarding.patch` forwards complete final-turn counters. Building this plugin alone does not enable native telemetry; a native runtime that emits usage is also required. Cancellation can retain observations delivered while the prompt was active; unreceived counters and spans remain missing. The optional runtime builder applies the patch and regenerates the bundled checked-hash `server.cpython-314.pyc` with a matching Python 3.14 compiler. It preserves the ELF executable and ZIP layout, updates the payload-size metadata, and refuses existing output paths. The rebuilt ACP server still needs compatible `localharness_external` and normal authentication; the builder does not configure a profile or replace a runtime.
 
 Validate the patch against the pinned archive without running a model or modifying the archive:
 
@@ -38,9 +38,13 @@ python3 scripts/build-agy-usage-runtime.py --par /path/to/agy_acp_server.par --o
 
 The rebuild needs Python stdlib, the system `patch` command, and temporary disk space for the archive. A compiler round-trip must reproduce the original bytecode before it writes the new executable. Loader verification uses an isolated `--sentinel` build and a clean `--help` comparison; this does not verify live model usage or activate the result in DSH.
 
-With host support for `usage.generationElapsedMs`, the existing tok/s display uses real output tokens divided by the receipt-time interval from the first thought/text delta to the last, excluding the union of completed native tool waits. Parallel tools are deducted once. A zero interval, missing tool lifecycle, text arriving during an active tool, trailing tools without later text, or a recognized native subagent tool makes the sample unavailable (`null`), not a fallback to whole-turn timing. Plan approval that runs another native prompt also makes timing unavailable; complete token totals from the distinct prompts are added once, while cumulative updates within each prompt are not summed.
+Native telemetry derives ACP aggregate usage from cumulative SDK snapshots around the completed native chat attempt. SDK prompt and total exclude cache; ACP `inputTokens` and `totalTokens` add the cache counter so the existing adapter can subtract `cachedReadTokens`. A missing cache counter cannot form that aggregate and omits usage; it is not treated as zero. Only a newly created native session establishes a zero baseline; a missing baseline after restore, missing end counters, and counter rewinds do not establish usage. Explicit zeros stay zero. Cache may exceed uncached prompt. Raw SDK snapshots are forwarded as `agy.usageSnapshots`; they remain distinct from raw upstream counters. Child-owned text (`parentTrajectoryId` set and different from `trajectoryId`) is stored on the sidecar and rendered in the child panel, not appended to the parent assistant stream.
 
-This is effective throughput, not pure model decoding speed: buffering, hidden reasoning, chunk boundaries, transport delay and unclassified waits affect the interval. Native subagent titles are recognized conservatively; renamed or custom delegation tools can remain unclassified, and batched chunks can produce very high rates. Native `streaming_duration` is not a validated full-generation interval and is not used. The host display may aggregate historical samples from other models. Hosts without the matching timing support ignore the field and retain their original elapsed-stream calculation, including native waits; deploy the host and adapter changes together. No UI styling or labels are changed.
+`scripts/agy-request-telemetry.patch` measures each CCPA upstream call through response-body completion and forwards its last raw `usageMetadata` with a request ID, model, completion status and monotonic duration in `agy.requestTelemetry`. Association is native-session scoped, not child-agent attribution. Completed requests and changed live SDK counters are sent as metadata-only `session_info_update` notifications before the prompt returns. The bridge persists this evidence and emits provisional `usageComplete: false` reports, replacing same-attempt values rather than summing updates. A successful final report clears partiality only when its accounting is complete; unknown SDK cache preserves known uncached input/output but omits cache and total. Hosts must support the completeness flag before enabling progressive reporting. `requestThroughput` sums output tokens, including thoughts exactly once, and durations from matched completed requests with usable counters. Concurrent durations sum; prefill, first-token wait and streaming proxy overhead are included, while tool waits between calls are excluded. Missing counters are not filled with zero. SDK-reported cache counts and an omitted upstream cache field remain separately inspectable.
+
+`generationElapsedMs` stays `null`: request throughput is not pure decode speed. Hosts display the separately labelled Request throughput rather than deriving it from whole-turn wall time or subtracting tools from assistant text spans. The native telemetry check (`python3 scripts/check-agy-request-telemetry.py --par <ownership-enabled-runtime.par>`) applies both telemetry patches to an isolated copy and exercises their actual wrappers without model calls. To build both, pass their concatenated patch to the runtime builder with `--patch`; enabling the plugin alone does not instrument the native binary.
+
+Older activity readers reject the additional evidence record types. Back up session and activity histories before enabling telemetry; a downgrade must restore compatible histories while retaining newer histories separately, not discard their evidence.
 
 ## Configuration
 
@@ -56,6 +60,7 @@ const provider = new AntigravityProvider({
   stateDirectory: '/var/lib/dsh/antigravity',
   instanceId: providerInstanceId('default'),
   cancelGraceMs: 500,
+  modelDiscoveryTimeoutMs: 30_000,
 })
 const registry = new ExternalAgentProviderRegistry()
 const unregister = registry.register(provider)
@@ -64,6 +69,8 @@ await unregister()
 ```
 
 Installation paths are explicit. On Linux the launch uses the provider-required --uid= argument; Windows accepts drive-letter and UNC working directories. cancelGraceMs controls the validated delay between native cancellation and process termination; it and both event byte limits must be positive safe integers.
+
+`modelDiscoveryTimeoutMs` bounds native initialization, OAuth and model discovery together; it defaults to 30,000 ms and accepts integers from 1 through 4,294,967,295. This startup budget is independent of request-throughput measurements. Ordinary Settings edits preserve an explicitly configured timeout.
 
 ## Authentication and Settings
 
@@ -89,7 +96,7 @@ The command checks each TypeScript face and runs keyless tests against only the 
 
 ## Session behavior
 
-- Native turns start only on a blank DSH session or a session already bound by a saved ready record. Existing DSH history cannot convert onto Antigravity (`ACTIVITY_HISTORY_LOCKED`).
+- Native turns start only on a blank DSH session or a session already bound by a saved ready record. Existing DSH history cannot convert onto Antigravity (`ACTIVITY_HISTORY_LOCKED`), including a prior non-native `request/header` whose response produced no assistant token. The current first native header remains allowed; unavailable canonical history blocks unbound native execution.
 - The provider requires negotiated native resume support, accepts approval-required, auto-accept-edits, and full-access modes, and applies the native mode before each prompt.
 - The provider registry confirms and audits full access once before ACP startup.
 - Native permission option IDs are preserved exactly; allow_always is accepted only with a native session or thread scope.
@@ -110,7 +117,7 @@ installAntigravityProvider() remains the library mount for hosts that own their 
 
 Startup and tool activity records live under `$DSH_HOME/plugin-data/antigravity/history`, independently of native binaries, account profiles and DSH session logs. Session identifiers select hashed filenames; records carry a schema version and sequence. Files are private, symlinks are rejected, and malformed or incomplete histories fail without being rewritten. One writer owns each history root; appends currently read the session file to determine its next sequence.
 
-Native startup is reusable only after its ready record is saved. Failed startup persistence disposes the new native session; startup, tool-persistence and execution failures propagate as failed turns rather than successful assistant text. The host does not append these custom records to Core. Existing DSH logs containing unmarked `antigravity/*` events remain unreadable on rc1 and are not rewritten. Saved native tool details remain available through the authenticated `activity/read` RPC; this plugin provides no conversation tab for displaying them. The 3082 lab verifies saved prompt/reply and activity replay after Host restart, including executable absence; basic conversation history also remains readable with the native plugin disabled. The lab also verifies a durable `ACTIVITY_BINDING_REJECTED` turn for a forced non-native route, successful native continuation after restoration, and a completed DeepSeek-parent/Antigravity-child subagent (foreground one-shot). No background continuable coverage is claimed. These acceptance results are scoped to 3082; production 3080 is unchanged. Account quota and settings can be exercised independently.
+Native startup is reusable only after its ready record is saved. Failed startup persistence disposes the new native session; startup, tool-persistence and execution failures propagate as failed turns rather than successful assistant text. The host does not append these custom records to Core. Existing DSH logs containing unmarked `antigravity/*` events remain unreadable on rc1 and are not rewritten. Saved native tool details remain available through the authenticated `activity/read` RPC; this plugin provides no conversation tab for displaying them. The 3082 lab verifies saved prompt/reply and activity replay after Host restart, including executable absence; basic conversation history also remains readable with the native plugin disabled. The lab also verifies a durable `ACTIVITY_BINDING_REJECTED` turn for a forced non-native route, successful native continuation after restoration, and a completed DeepSeek-parent/Antigravity-child subagent (foreground one-shot). No background continuable coverage is claimed. Lab and production share this release; 3082 remains the isolated verification plane. Account quota and settings can be exercised independently.
 
 `pnpm exec vitest run tests/activity-store.test.ts tests/activity-host.test.ts tests/activity-binding.test.ts` checks on-disk restoration, isolation from Core event writes, and execution-time provider checks without starting Antigravity. [ADR 0002](docs/adr/0002-plugin-owned-native-history.md) records ownership and display boundaries.
 
@@ -127,6 +134,14 @@ The LLM bridge forwards only complete provider-reported token counters; missing 
 ## Real-binary smoke
 
 Set `ANTIGRAVITY_ACP_EXECUTABLE` and `ANTIGRAVITY_HARNESS_EXECUTABLE`, then run `pnpm exec vitest run tests/real-binary.test.ts`. The initialize-only smoke validates the user-provided executable pair without authentication or a model request. Also set `ANTIGRAVITY_AUTHENTICATED_STATE_DIRECTORY` and `ANTIGRAVITY_AUTHENTICATED_INSTANCE_ID` to run the opt-in read-only turn, cancellation, and resume smoke against that isolated authenticated profile. Each smoke skips when its inputs are absent and neither runs in ordinary unit gates. The 3082 live suite verifies metadata-backed canonical Bash rendering, child-only tool placement, keyboard disclosure, zero-tool containers, and refresh. Keyless assembled replay covers nested/read/Bash/empty cases; the native turn reports nesting depth 1, so real grandchild execution is not claimed.
+
+## Plan review
+
+The adapter reads the exact session’s logged `sessionProjections.stateOf(agent.session, 'plan').active` flag before reviewing a completed native response. Tool availability, Markdown headings, `plan.md`, `Proceed`, and ACP plan updates never activate review. Missing plan projection or session means no review; state-read errors propagate. An explicitly active Plan session retains its review card and approved native continuation. See [Plan mode authority](docs/notes/2026-09-09-plan-mode-authority.md).
+
+## Native question answers
+
+Free-text Other answers require the paired native `agy-user-question.patch` and adapter. `build-agy-usage-runtime.py --question-patch` rebuilds both server and hook source/bytecode. The question-only metadata extension preserves literal text without inventing permission options; unsupported native runtimes reject custom answers. See [native question delivery](docs/notes/2026-09-09-native-question-freeform.md) for the wire and keyless GUI check.
 
 ## Provider settings integration
 

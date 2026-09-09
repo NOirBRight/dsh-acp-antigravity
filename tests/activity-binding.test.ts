@@ -51,14 +51,25 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<unknown[]> {
   return out
 }
 
+function requestHeader(provider: string, reason: 'initial' | 'change' = 'initial'): { type: 'request/header'; data: { header: { config: { provider: string; model: string } }; reason: 'initial' | 'change' } } {
+  return { type: 'request/header', data: { header: { config: { provider, model: 'model' } }, reason } }
+}
+
+function userOnly(): GenerateOptions['messages'] {
+  return [
+    { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } as GenerateOptions['messages'][number],
+  ]
+}
+
 /** Drive one request through a real Context waterfall with the guard installed. */
 function drive(
   store: ActivityBindingStore,
   options: GenerateOptions,
   finalChunks: readonly unknown[] = [],
+  readSessionLog: (sessionId: string) => readonly { readonly type: string; readonly data?: unknown }[] | undefined = () => [],
 ): { nextCalls: number; run: () => AsyncIterable<StreamChunk> } {
   const ctx: ActivityBindingHostContext = new Context() as unknown as ActivityBindingHostContext
-  installActivityBindingGuard(ctx, store)
+  installActivityBindingGuard(ctx, store, readSessionLog)
   let nextCalls = 0
   const real = ctx as unknown as Context
   const run = (): AsyncIterable<StreamChunk> =>
@@ -85,6 +96,12 @@ function throwingStore(): ActivityBindingStore {
 }
 
 describe('installActivityBindingGuard', () => {
+  it('rejects an unavailable canonical history before first native execution', () => {
+    const driver = drive(new AntigravityActivityStore(tempRoot()), loopRequest('missing', ACTIVITY_NATIVE_PROVIDER, userOnly()), [], () => undefined)
+    expect(() => driver.run()).toThrow(LlmError)
+    expect(driver.nextCalls).toBe(0)
+  })
+
   it('rejects a bound session routed to another provider before next', () => {
     const root = tempRoot()
     const store = new AntigravityActivityStore(root)
@@ -131,6 +148,20 @@ describe('installActivityBindingGuard', () => {
     expect(driver.nextCalls).toBe(1)
   })
 
+  it('does not treat a prior request/header as a native binding', async () => {
+    const root = tempRoot()
+    const store = new AntigravityActivityStore(root)
+    store.append('bound', [readyEvent])
+    const driver = drive(
+      store,
+      loopRequest('bound', ACTIVITY_NATIVE_PROVIDER, userOnly()),
+      [],
+      () => [requestHeader('deepseek'), requestHeader(ACTIVITY_NATIVE_PROVIDER, 'change')],
+    )
+    await expect(collect(driver.run())).resolves.toEqual([])
+    expect(driver.nextCalls).toBe(1)
+  })
+
   it('allows unbound sessions without a ready record', async () => {
     const root = tempRoot()
     const driver = drive(new AntigravityActivityStore(root), loopRequest('missing', 'deepseek'))
@@ -141,12 +172,39 @@ describe('installActivityBindingGuard', () => {
   it('allows a blank session first native turn', async () => {
     const driver = drive(
       new AntigravityActivityStore(tempRoot()),
-      loopRequest('blank', ACTIVITY_NATIVE_PROVIDER, [
-        { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } as GenerateOptions['messages'][number],
-      ]),
+      loopRequest('blank', ACTIVITY_NATIVE_PROVIDER, userOnly()),
     )
     await expect(collect(driver.run())).resolves.toEqual([])
     expect(driver.nextCalls).toBe(1)
+  })
+
+  it('allows a first native turn when the current request/header is already Antigravity', async () => {
+    const driver = drive(
+      new AntigravityActivityStore(tempRoot()),
+      loopRequest('blank', ACTIVITY_NATIVE_PROVIDER, userOnly()),
+      [],
+      () => [requestHeader(ACTIVITY_NATIVE_PROVIDER)],
+    )
+    await expect(collect(driver.run())).resolves.toEqual([])
+    expect(driver.nextCalls).toBe(1)
+  })
+
+  it('rejects converting a prior foreign request/header onto Antigravity before any assistant token', () => {
+    const driver = drive(
+      new AntigravityActivityStore(tempRoot()),
+      loopRequest('busy', ACTIVITY_NATIVE_PROVIDER, userOnly()),
+      [],
+      () => [requestHeader('deepseek'), requestHeader(ACTIVITY_NATIVE_PROVIDER, 'change')],
+    )
+    let failure: unknown
+    try {
+      driver.run()
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(LlmError)
+    expect((failure as LlmError).code).toBe(ACTIVITY_HISTORY_LOCKED)
+    expect(driver.nextCalls).toBe(0)
   })
 
   it('rejects converting existing DSH history onto Antigravity', () => {
@@ -174,9 +232,12 @@ describe('installActivityBindingGuard', () => {
       { provider: 'deepseek', model: 'model', messages: [], sessionId },
       { provider: 'deepseek', model: 'model', messages: [] },
     ]
+    const readLog = (): never => {
+      throw new Error('session log must not be read')
+    }
     for (const options of shaped) {
       expect(isAgentLoopRequest(options)).toBe(false)
-      const driver = drive(store, options)
+      const driver = drive(store, options, [], readLog)
       await expect(collect(driver.run())).resolves.toEqual([])
       expect(driver.nextCalls).toBe(1)
     }

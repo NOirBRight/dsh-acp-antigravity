@@ -36,8 +36,14 @@ export const nativeTurnDefinition: ConversationNodeDefinition<AntigravityNativeT
   kind: 'antigravity-native',
   target: 'chat',
   match: event => {
-    if (event.type === 'turn/start') return { id: String(event.data.turn), role: 'start' }
-    if (event.type === 'turn/end') return { id: String(event.data.turn), role: 'update' }
+    const turn = (event.data as { turn?: unknown } | undefined)?.turn
+    if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 1) return null
+    const id = String(turn)
+    if (event.type === 'turn/start') return { id, role: 'start' }
+    if (event.type === 'turn/end'
+      || event.type === 'step/start'
+      || event.type === 'assistant/chunk'
+      || event.type === 'assistant/message') return { id, role: 'update' }
     return null
   },
   start: (context, match) => {
@@ -124,6 +130,15 @@ export function rowsForTurnWindow<T extends { readonly firstSeenAt: string }>(
 }
 
 function anchorOf(context: ConversationNodeContext<AntigravityNativeTurn>): number {
-  const seq = context.start?.event.seq ?? context.matches[0]?.event.seq
-  return typeof seq === 'number' && Number.isFinite(seq) ? seq : 0
+  let seq = context.start?.event.seq
+  let chunk: number | undefined
+  let step: number | undefined
+  for (const match of context.matches) {
+    const next = match.event.seq
+    if (typeof next !== 'number' || !Number.isFinite(next)) continue
+    if (match.event.type === 'assistant/chunk' && chunk === undefined) chunk = next
+    else if (match.event.type === 'step/start' && step === undefined) step = next
+  }
+  const chosen = chunk ?? step ?? seq
+  return typeof chosen === 'number' && Number.isFinite(chosen) ? chosen : 0
 }

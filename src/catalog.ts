@@ -132,5 +132,17 @@ export function nativeAntigravityModelId(
     if (alias !== undefined) return alias.id
   }
   if (ids.has(logical)) return logical
+  if (effort !== undefined && effort !== DEFAULT_EFFORT) return logical + '-' + effort
   return logical
+}
+
+/** Native rows that collapse to High/Medium/Low when ACP has not listed the account yet. */
+export function effortVariants(id: string): { id: string; name: string }[] {
+  const logical = peelEffort(id).logical
+  return [
+    { id: logical, name: logical },
+    { id: logical + '-high', name: logical + ' (High)' },
+    { id: logical + '-medium', name: logical + ' (Medium)' },
+    { id: logical + '-low', name: logical + ' (Low)' },
+  ]
 }

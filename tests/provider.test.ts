@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { decodeConfig } from '../src/client-contract.js'
 import { createAntigravityLlmBridge } from '../src/llm-bridge.js'
 import { zPromptResponse } from '@agentclientprotocol/sdk/dist/schema/zod.gen.js'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
@@ -106,6 +107,23 @@ function host(events: string[] = []): ExternalAgentTurnHost {
 }
 
 describe('Antigravity mapping and safety', () => {
+  it('validates and uses the configured discovery deadline across native startup', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      for (const modelDiscoveryTimeoutMs of [undefined, 45_000]) {
+        const provider = new AntigravityProvider({ ...config(), ...(modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs }) }, { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => new FakeConnection() })
+        try {
+          await provider.listModels()
+          expect(timeout).toHaveBeenLastCalledWith(modelDiscoveryTimeoutMs ?? 30_000)
+        } finally { await provider.dispose() }
+      }
+      for (const modelDiscoveryTimeoutMs of [0, -1, 1.5, NaN, Infinity, 0x100000000]) {
+        expect(() => new AntigravityProvider({ ...config(), modelDiscoveryTimeoutMs })).toThrow('modelDiscoveryTimeoutMs')
+        expect(decodeConfig({ ...config(), enabled: true, modelDiscoveryTimeoutMs })).toBeUndefined()
+      }
+      expect(decodeConfig({ ...config(), enabled: true, modelDiscoveryTimeoutMs: 45_000 })?.modelDiscoveryTimeoutMs).toBe(45_000)
+    } finally { timeout.mockRestore() }
+  })
   it('preserves ACP content when a tool has no raw output', () => {
     const content = [{ type: 'content', content: { type: 'text', text: 'native result' } }]
     expect(normalizeAntigravitySessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-content', status: 'completed', content }, { maxTextBytes: 1024, maxPayloadBytes: 4096 })).toMatchObject({ output: JSON.stringify(content) })
@@ -175,6 +193,43 @@ describe('Antigravity mapping and safety', () => {
     await expect(handler('session/request_permission', { sessionId: 'native', toolCall: { toolCallId: 'interaction_private', title: 'Pick one' }, options: [{ optionId: 'native-a', kind: 'allow_once', name: 'First' }, { optionId: 'native-b', kind: 'reject_once', name: 'Second' }] }, 7)).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'native-b' } })
     expect(question).toMatchObject({ question: 'Pick ', options: ['First', 'Secon'], multiple: false })
     expect(JSON.stringify(question)).not.toContain('interaction_private')
+  })
+
+  it.each(['用户在其他中输入的答案', 'native-a', 'First'])('forwards literal custom text %s without selecting a native choice', async text => {
+    const handler = createAntigravityInteractionHandler({
+      ...host(),
+      requestPermission: async () => { throw new Error('question must not authorize an action') },
+      requestUserInput: async () => ({ answers: [text], custom: text }),
+    })
+    const response = await handler('session/request_permission', {
+      sessionId: 'native',
+      toolCall: { toolCallId: 'interaction_custom', title: 'Pick one' },
+      _meta: { 'agy.supportsFreeform': true },
+      options: [{ optionId: 'native-a', kind: 'allow_once', name: 'First' }],
+    }, 8)
+    expect(response).toEqual({ outcome: { outcome: 'cancelled' }, _meta: { 'agy.freeformResponse': text } })
+  })
+
+  it.each([undefined, false, 'true'])('requires explicit native freeform support (%s)', async capability => {
+    const handler = createAntigravityInteractionHandler({ ...host(), requestUserInput: async () => ({ answers: ['custom'], custom: 'custom' }) })
+    await expect(handler('session/request_permission', {
+      toolCall: { toolCallId: 'interaction_custom', title: 'Pick one' },
+      options: [{ optionId: '1', kind: 'allow_once', name: 'First' }],
+      _meta: { 'agy.supportsFreeform': capability },
+    }, 9)).rejects.toThrow('does not support custom question answers')
+  })
+
+  it('does not treat freeform support as permission to select an unoffered action', async () => {
+    const handler = createAntigravityInteractionHandler({
+      ...host(),
+      requestPermission: async () => ({ kind: 'allow-once', optionId: optionId('custom') }),
+      requestUserInput: async () => { throw new Error('permission must not become a question') },
+    })
+    await expect(handler('session/request_permission', {
+      toolCall: { toolCallId: 'real_tool', title: 'Write file' },
+      options: [{ optionId: '1', kind: 'allow_once', name: 'Allow' }],
+      _meta: { 'agy.supportsFreeform': true },
+    }, 10)).rejects.toThrow('unoffered permission option')
   })
 
   it('returns the ACP cancelled outcome when a permission wait aborts', async () => {
@@ -249,18 +304,22 @@ describe('Antigravity mapping and safety', () => {
 })
 
 describe('Antigravity provider lifecycle', () => {
-  it('retains final native usage through the session, bounded host and LLM bridge', async () => {
+  it.each([false, true])('retains final native usage and request evidence through the bounded host (telemetry=%s)', async withTelemetry => {
+    const telemetry = { version: 1, provenance: 'ccpa-proxy', scope: 'session', promptId: 'prompt-1', sessionKey: 'native-1', requests: [{ requestId: 'request-1', model: 'gemini-pro', status: 'completed', durationMs: 1000, usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, thoughtsTokenCount: 30, totalTokenCount: 150, cachedContentTokenCount: 60 } }] }
+    const records: unknown[] = []
     const provider = new AntigravityProvider(config(), {
       cwd: '/workspace', launchSpec: async () => launchSpec(),
-      connectionFactory: () => new FakeConnection({ promptResponse: zPromptResponse.parse({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20, thoughtTokens: 30, totalTokens: 150, cachedReadTokens: 60 } }) }),
+      connectionFactory: () => new FakeConnection({ promptResponse: zPromptResponse.parse({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20, thoughtTokens: 30, totalTokens: 150, cachedReadTokens: 60 }, ...(withTelemetry ? { _meta: { 'agy.requestTelemetry': telemetry } } : {}) }) }),
     })
     const registry = new ExternalAgentProviderRegistry()
     const unregister = registry.register(provider)
-    const adapter = createAntigravityLlmBridge({ registry, getProvider: () => provider })
+    const adapter = createAntigravityLlmBridge({ registry, getProvider: () => provider }, undefined, undefined, { appendToolEvents: (_session, events) => { records.push(...events) } })
     try {
       const chunks = []
       for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini-pro', sessionId: 'usage-bridge', messages: [{ role: 'user', source: { kind: 'user' }, content: 'hello' }] })) chunks.push(chunk)
-      expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([{ type: 'usage', usage: { inputTokens: 40, outputTokens: 50, reasoningTokens: 30, cacheReadTokens: 60, totalTokens: 150, generationElapsedMs: null } }])
+      const usage = { inputTokens: 40, outputTokens: 50, reasoningTokens: 30, cacheReadTokens: 60, totalTokens: 150, generationElapsedMs: null, ...(withTelemetry ? { requestThroughput: { outputTokens: 50, elapsedMs: 1000, requestCount: 1 } } : {}) }
+      expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([{ type: 'usage', usage: { ...usage, usageComplete: false } }, { type: 'usage', usage }])
+      if (withTelemetry) expect(records).toContainEqual({ type: 'antigravity/request-telemetry', data: telemetry })
     } finally {
       await adapter.dispose()
       await unregister()

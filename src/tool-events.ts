@@ -2,6 +2,12 @@
 
 import type { ExternalAgentEvent, ExternalAgentSessionRef, ExternalAgentOwnership } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
+import type { NativeRequestTelemetry, NativeUsageSnapshots } from './request-telemetry.js'
+
+/** Prompt-scoped raw model request timing and usage evidence. */
+export const ANTIGRAVITY_REQUEST_TELEMETRY = 'antigravity/request-telemetry' as const
+/** Raw pre-difference SDK usage evidence for one native prompt. */
+export const ANTIGRAVITY_USAGE_SNAPSHOTS = 'antigravity/usage-snapshots' as const
 
 const MAX_TOOL_TEXT = 4000
 
@@ -94,6 +100,8 @@ export type AntigravitySessionReadyEvent = {
 }
 
 export const ANTIGRAVITY_AGENT_OBSERVED = 'antigravity/agent-observed' as const
+export const ANTIGRAVITY_AGENT_TEXT = 'antigravity/agent-text' as const
+export const ANTIGRAVITY_USER_QUESTION_ANSWER = 'antigravity/user-question-answer' as const
 
 /** Discovery descriptor for a native trajectory seen without a tool row.
  *
@@ -108,10 +116,40 @@ export type AntigravityAgentObservedEvent = {
   readonly data: AntigravityToolOwnership
 }
 
+/** Child-owned native text kept off the parent assistant stream. */
+export interface AntigravityAgentTextData {
+  readonly trajectoryId: string
+  readonly parentTrajectoryId?: string
+  readonly kind: 'text' | 'thought'
+  readonly text: string
+}
+
+export type AntigravityAgentTextEvent = {
+  readonly type: typeof ANTIGRAVITY_AGENT_TEXT
+  readonly data: AntigravityAgentTextData
+}
+
+/** Exact host answer to one native user question, stored before ACP delivery. */
+export interface AntigravityUserQuestionAnswerData {
+  readonly requestId: string
+  readonly question: string
+  readonly selected: readonly string[]
+  readonly custom?: string
+}
+
+export type AntigravityUserQuestionAnswerEvent = {
+  readonly type: typeof ANTIGRAVITY_USER_QUESTION_ANSWER
+  readonly data: AntigravityUserQuestionAnswerData
+}
+
 export type AntigravityToolEvent =
   | { readonly type: typeof ANTIGRAVITY_TOOL_START; readonly data: AntigravityToolStartData }
   | { readonly type: typeof ANTIGRAVITY_TOOL_UPDATE; readonly data: AntigravityToolUpdateData }
   | AntigravityAgentObservedEvent
+  | AntigravityAgentTextEvent
+  | AntigravityUserQuestionAnswerEvent
+  | { readonly type: typeof ANTIGRAVITY_REQUEST_TELEMETRY; readonly data: NativeRequestTelemetry }
+  | { readonly type: typeof ANTIGRAVITY_USAGE_SNAPSHOTS; readonly data: NativeUsageSnapshots }
 
 export interface AntigravityToolActivity {
   readonly toolId: string
@@ -194,7 +232,7 @@ export function toDurableAgentEvents(ownership: AntigravityToolOwnership | undef
  * @returns The new row state.
  */
 export function foldAntigravityToolEvent(state: AntigravityToolState | undefined, event: AntigravityToolEvent): AntigravityToolState {
-  if (event.type === ANTIGRAVITY_AGENT_OBSERVED) throw new Error('Antigravity agent-observed is not a tool row event')
+  if (event.type !== ANTIGRAVITY_TOOL_START && event.type !== ANTIGRAVITY_TOOL_UPDATE) throw new Error('Antigravity activity is not a tool row event')
   if (event.type === ANTIGRAVITY_TOOL_START) {
     if (state !== undefined) throw new Error('Antigravity tool start repeats toolId ' + state.toolId)
     return event.data

@@ -15,7 +15,7 @@ import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
 import { createAntigravityQuotaReader, type AntigravityQuotaReader } from './quota.js'
 import { registerAcpSettingsRpc } from './rpc.js'
-import { dshHome, loadPersistedConfig, savePersistedConfig } from './store.js'
+import { dshHome, loadPersistedConfig, loadPersistedModels, savePersistedConfig, savePersistedModels } from './store.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
 import { ANTIGRAVITY_SESSION_READY, type AntigravityToolEvent } from './tool-events.js'
 
@@ -25,6 +25,8 @@ export interface DshPluginConfig {
   readonly harnessPath?: string
   readonly stateDirectory?: string
   readonly instanceId?: string
+  /** Deadline for native initialization, OAuth and model discovery; defaults to 30 seconds. */
+  readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly enabled?: boolean
 }
@@ -54,6 +56,7 @@ function resolvePluginConfig(config: DshPluginConfig, persisted?: AcpAntigravity
     stateDirectory: (merged.stateDirectory ?? '').trim() || defaultStateDirectory(),
     instanceId,
     ...(merged.model === undefined || merged.model.trim() === '' ? {} : { model: merged.model.trim() }),
+    ...(merged.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: merged.modelDiscoveryTimeoutMs }),
     enabled: merged.enabled !== false,
   }
 }
@@ -82,6 +85,7 @@ function resolveSandboxPolicy(ctx: DshPluginContext, sessionId: string | undefin
   try {
     resolved = policy.resolve({ session })
   } catch {
+    // Unreadable sandbox policy fails closed to approval-required at the bridge.
     return undefined
   }
   if (resolved.mode !== 'read-only' && resolved.mode !== 'workspace-write' && resolved.mode !== 'danger-full-access') return undefined
@@ -118,6 +122,7 @@ export async function requestNativeApproval(ctx: DshPluginContext, input: Native
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     })
   } catch {
+    // A throwing approval service cannot grant or deny; the bridge treats this as unavailable.
     return 'unavailable'
   }
 }
@@ -128,6 +133,7 @@ function toProviderConfig(config: AcpAntigravitySettingsConfig) {
     harnessPath: config.harnessPath,
     stateDirectory: config.stateDirectory,
     instanceId: providerInstanceId(config.instanceId),
+    ...(config.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: config.modelDiscoveryTimeoutMs }),
     ...(config.model === undefined ? {} : { model: config.model }),
   }
 }
@@ -137,7 +143,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   const home = dshHome()
   const activity = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history'))
   const { installActivityBindingGuard } = await import('./activity-binding.js')
-  installActivityBindingGuard(ctx, activity)
+  installActivityBindingGuard(ctx, activity, sessionId => {
+    const agent = agentFor(ctx, sessionId) as { session?: { snapshotEvents?: () => readonly { readonly type: string; readonly data?: unknown }[] } } | undefined
+    return agent?.session?.snapshotEvents?.()
+  })
   const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
     if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
     try {
@@ -160,7 +169,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   let changing = false
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
-  let models: { id: string; name: string }[] = []
+  let models: { id: string; name: string }[] = loadPersistedModels(home)
   let quotaReader: AntigravityQuotaReader = createAntigravityQuotaReader(toProviderConfig(live), { getRuntimeVersion: () => installed?.provider.health.version })
 
   const mount = async (next: AcpAntigravitySettingsConfig): Promise<void> => {
@@ -171,7 +180,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     try {
       await bridge?.reset()
       await previous?.dispose()
-      models = []
+      models = loadPersistedModels(home)
       authorizationUrl = undefined
       live = next
       quotaReader.invalidate()
@@ -199,6 +208,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       harnessPath: live.harnessPath,
       stateDirectory: live.stateDirectory,
       ...(live.model === undefined ? {} : { model: live.model }),
+      ...(live.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: live.modelDiscoveryTimeoutMs }),
       models,
       installed: !('status' in await validateAntigravityInstallation(toProviderConfig(live))),
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
@@ -217,9 +227,19 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   }
 
   await mount(live)
+  void (async () => {
+    try {
+      if (installed === undefined) return
+      const listed = await installed.provider.listModels()
+      models = listed.map(model => ({ id: String(model.id), name: model.name }))
+      savePersistedModels(home, models)
+    } catch {
+      // Picker keeps the persisted catalog until a later refresh succeeds.
+    }
+  })()
   if (typeof ctx.inject === 'function') {
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
-      const adapter = createAntigravityLlmBridge({ registry, getProvider: () => changing || !live.enabled ? undefined : installed?.provider }, () => models, next => { models = [...next] }, {
+      const adapter = createAntigravityLlmBridge({ registry, getProvider: () => changing || !live.enabled ? undefined : installed?.provider }, () => models, next => { models = [...next]; savePersistedModels(home, models) }, {
         ask: async request => {
           const service = ctx.get?.('userQuestions') as { ask?: (payload: Record<string, unknown>) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
           if (service?.ask === undefined) return { answers: [] }
@@ -230,6 +250,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         appendSessionReady: (sessionId, ref) => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity', ref } }]) },
         loadSession: id => nativeSessionBinding(activity.read(id), id),
         appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendActivity(sessionId, events) },
+        isPlanMode: sessionId => {
+          const agent = agentFor(ctx, sessionId) as { session: unknown } | undefined
+          const projections = ctx.get?.('sessionProjections') as { stateOf(session: unknown, key: 'plan'): { active: boolean } | undefined } | undefined
+          return agent !== undefined && projections?.stateOf(agent.session, 'plan')?.active === true
+        },
         resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
         requestApproval: input => requestNativeApproval(ctx, input),
       })
@@ -252,10 +277,6 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     catalog: async () => {
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
-      if (models.length === 0) {
-        try { models = (await installed.provider.listModels()).map(model => ({ id: String(model.id), name: model.name })) }
-        catch { return { groups: [] } }
-      }
       if (models.length === 0) return { groups: [] }
       return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: collapseAntigravityModels(models) }] }
     },
@@ -270,6 +291,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (action === 'refresh-models') {
         const listed = await installed.provider.listModels(signal)
         models = listed.map(model => ({ id: String(model.id), name: model.name }))
+        savePersistedModels(home, models)
         return models
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {

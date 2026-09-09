@@ -14,6 +14,8 @@ export interface AcpAntigravitySettingsConfig {
   readonly harnessPath: string
   readonly stateDirectory: string
   readonly instanceId: string
+  /** Deadline for native initialization, OAuth and model discovery; defaults to 30 seconds. */
+  readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly enabled: boolean
 }
@@ -28,6 +30,7 @@ export interface AcpSettingsRow {
   readonly harnessPath: string
   readonly stateDirectory: string
   readonly model?: string
+  readonly modelDiscoveryTimeoutMs?: number
   readonly models: readonly { readonly id: string; readonly name: string }[]
   readonly installed: boolean
   readonly authenticated: boolean
@@ -65,6 +68,8 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
   const rows: AcpSettingsRow[] = []
   for (const row of value.rows) {
     if (!isRecord(row)) return undefined
+    const modelDiscoveryTimeoutMs = decodeConfig(row)?.modelDiscoveryTimeoutMs
+    if (row.modelDiscoveryTimeoutMs !== undefined && modelDiscoveryTimeoutMs === undefined) return undefined
     if (typeof row.provider !== 'string' || typeof row.instanceId !== 'string' || typeof row.title !== 'string') return undefined
     if (typeof row.enabled !== 'boolean' || typeof row.executablePath !== 'string' || typeof row.harnessPath !== 'string') return undefined
     if (typeof row.stateDirectory !== 'string' || typeof row.installed !== 'boolean' || typeof row.authenticated !== 'boolean') return undefined
@@ -83,6 +88,7 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
       harnessPath: row.harnessPath,
       stateDirectory: row.stateDirectory,
       ...(typeof row.model === 'string' ? { model: row.model } : {}),
+      ...(modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs }),
       models,
       installed: row.installed,
       authenticated: row.authenticated,
@@ -105,6 +111,7 @@ export function decodeConfig(value: unknown): AcpAntigravitySettingsConfig | und
   if (!isRecord(value) || typeof value.executablePath !== 'string' || typeof value.harnessPath !== 'string') return undefined
   if (typeof value.stateDirectory !== 'string' || typeof value.instanceId !== 'string' || value.instanceId.trim() === '') return undefined
   if (typeof value.enabled !== 'boolean') return undefined
+  if (value.modelDiscoveryTimeoutMs !== undefined && (typeof value.modelDiscoveryTimeoutMs !== 'number' || !Number.isInteger(value.modelDiscoveryTimeoutMs) || value.modelDiscoveryTimeoutMs < 1 || value.modelDiscoveryTimeoutMs > 0xffffffff)) return undefined
   if (value.model !== undefined && (typeof value.model !== 'string' || value.model.trim() === '')) return undefined
   return {
     executablePath: value.executablePath,
@@ -112,6 +119,7 @@ export function decodeConfig(value: unknown): AcpAntigravitySettingsConfig | und
     stateDirectory: value.stateDirectory,
     instanceId: value.instanceId.trim(),
     ...(value.model === undefined ? {} : { model: value.model.trim() }),
+    ...(value.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: value.modelDiscoveryTimeoutMs }),
     enabled: value.enabled,
   }
 }

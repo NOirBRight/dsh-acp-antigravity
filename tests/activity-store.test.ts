@@ -9,10 +9,12 @@ import {
   AntigravityActivityStore,
   type AntigravityActivityHistory,
 } from '../src/activity-store.js'
+import { decodeActivityRecord } from '../src/activity-contract.js'
 import {
   ANTIGRAVITY_SESSION_READY,
   ANTIGRAVITY_TOOL_START,
   ANTIGRAVITY_TOOL_UPDATE,
+  ANTIGRAVITY_USER_QUESTION_ANSWER,
   type AntigravitySessionReadyEvent,
   type AntigravityToolEvent,
 } from '../src/tool-events.js'
@@ -77,6 +79,37 @@ describe('AntigravityActivityStore', () => {
     expect(store.read('session-b').records.map(record => record.type)).toEqual([ANTIGRAVITY_TOOL_START, ANTIGRAVITY_TOOL_UPDATE])
     expect(store.read('session-unknown')).toEqual({ version: ACTIVITY_SCHEMA_VERSION, records: [] })
     expect(readdirSync(root)).toHaveLength(2)
+  })
+
+  it('persists exact user-question selected and custom before delivery', () => {
+    const root = tempRoot()
+    const answer: AntigravityToolEvent = {
+      type: ANTIGRAVITY_USER_QUESTION_ANSWER,
+      data: { requestId: 'q-label', question: 'Pick one', selected: [], custom: 'OTHER_9f6b2c：保留这段中文回答' },
+    }
+    const mixed: AntigravityToolEvent = {
+      type: ANTIGRAVITY_USER_QUESTION_ANSWER,
+      data: { requestId: 'q-mix', question: 'Choose', selected: ['First'], custom: '1' },
+    }
+    const emptyCustom: AntigravityToolEvent = {
+      type: ANTIGRAVITY_USER_QUESTION_ANSWER,
+      data: { requestId: 'q-empty', question: 'Pick one', selected: ['Second'], custom: '' },
+    }
+    new AntigravityActivityStore(root).append('session-q', [readyEvent, answer, mixed, emptyCustom])
+    const records = new AntigravityActivityStore(root).read('session-q').records
+    expect(records.map(record => record.type)).toEqual([
+      ANTIGRAVITY_SESSION_READY,
+      ANTIGRAVITY_USER_QUESTION_ANSWER,
+      ANTIGRAVITY_USER_QUESTION_ANSWER,
+      ANTIGRAVITY_USER_QUESTION_ANSWER,
+    ])
+    expect(records[1]?.data).toEqual(answer.data)
+    expect(records[2]?.data).toEqual(mixed.data)
+    expect(records[3]?.data).toEqual(emptyCustom.data)
+    const line = JSON.stringify({ v: 1, seq: 1, time: '2026-09-09T00:00:00.000Z', type: ANTIGRAVITY_USER_QUESTION_ANSWER, data: answer.data })
+    expect(decodeActivityRecord(line, 1).data).toEqual(answer.data)
+    expect(() => decodeActivityRecord(JSON.stringify({ v: 1, seq: 1, time: '2026-09-09T00:00:00.000Z', type: ANTIGRAVITY_USER_QUESTION_ANSWER, data: { requestId: 'q', question: 'Pick one', selected: ['First'], custom: 1 } }), 1)).toThrow(/corrupt/)
+    expect(() => decodeActivityRecord(JSON.stringify({ v: 1, seq: 1, time: '2026-09-09T00:00:00.000Z', type: ANTIGRAVITY_USER_QUESTION_ANSWER, data: { requestId: '', question: 'Pick one', selected: [] } }), 1)).toThrow(/corrupt/)
   })
 
   it('keeps traversal session ids inside the root', () => {
