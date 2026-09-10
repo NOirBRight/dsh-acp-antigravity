@@ -46,25 +46,33 @@ export function shouldClearQuota(previous: AcpSettingsRow | undefined, incoming:
   return !incoming?.authenticated || (previous !== undefined && (previous.instanceId !== incoming.instanceId || previous.stateDirectory !== incoming.stateDirectory))
 }
 
-/** Name every catalog field this row changed since the snapshot the card rendered from.
+/** Name every catalog field the save payload must store as a user override.
  *
- * The editor patches values without touching the row's flags, so flags carried by
- * the snapshot name only the fields that were already overridden. Comparing the
- * row against the same row in the last accepted snapshot turns each edit into the
- * flag the save payload needs, and leaves an untouched row flagless.
+ * The payload replaces the stored override set, so a field is stored when either
+ * of two things holds: the row differs from the snapshot it was edited from (a new
+ * edit), or that snapshot already stored the field and the edit left it alone. The
+ * second case is what keeps an earlier save from being cleared by any later save
+ * the user makes without touching that field.
+ *
+ * The row's own flags are a client-side signal, not storage: false means the user
+ * restored the field to discovery, so the field is dropped instead of carried over.
  * @param model - the row about to be persisted.
  * @param baseline - the same row in the last accepted snapshot, absent for a row the user added.
- * @returns flag names merged with the row's existing flags, or undefined when nothing changed.
+ * @returns fields to write, or undefined when the row stores no override.
  */
 export function catalogOverrideFlags(model: AcpCatalogModel, baseline: AcpCatalogModel | undefined): Record<string, boolean> | undefined {
-  const flags: Record<string, boolean> = { ...model.overrides }
-  const changed = (field: string, differs: boolean): void => { if (differs) flags[field] = true }
-  changed('name', model.name !== baseline?.name)
-  changed('vision', model.vision !== baseline?.vision)
-  changed('thinking', model.thinking !== baseline?.thinking)
-  changed('contextWindow', model.contextWindow !== baseline?.contextWindow)
-  changed('output', model.maxOutputTokens !== baseline?.maxOutputTokens)
-  changed('defaultEffort', model.reasoning?.defaultEffort !== baseline?.reasoning?.defaultEffort)
+  const flags: Record<string, boolean> = {}
+  const stored = baseline?.overrides ?? {}
+  const field = (name: string, differs: boolean): void => {
+    if (model.overrides?.[name] === false) return
+    if (differs || stored[name] === true) flags[name] = true
+  }
+  field('name', model.name !== baseline?.name)
+  field('vision', model.vision !== baseline?.vision)
+  field('thinking', model.thinking !== baseline?.thinking)
+  field('contextWindow', model.contextWindow !== baseline?.contextWindow)
+  field('output', model.maxOutputTokens !== baseline?.maxOutputTokens)
+  field('defaultEffort', model.reasoning?.defaultEffort !== baseline?.reasoning?.defaultEffort)
   return Object.keys(flags).length === 0 ? undefined : flags
 }
 

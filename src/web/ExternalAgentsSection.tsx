@@ -241,6 +241,14 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
   const removeModel = (index: number): void => {
     onCatalogChange(row.models.filter((_, at) => at !== index))
   }
+  // Restore clears the stored override for one field. The row keeps its displayed
+  // value until the recomposed snapshot arrives; the flag records the intent.
+  const restoreModelField = (index: number, field: string): void => {
+    const model = row.models[index]
+    if (model === undefined) return
+    const next = { ...model, overrides: { ...model.overrides, [field]: false } }
+    onCatalogChange(row.models.map((current, at) => at === index ? next : current))
+  }
   const toggleModel = (rowId: string): void => {
     setExpandedModels(current => {
       const next = new Set(current)
@@ -397,6 +405,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
                 vision: t('vision'), thinking: t('thinking'), defaultEffort: t('defaultEffort'),
                 contextWindow: t('contextWindow'), contextWindowDefault: t('unknown'),
                 unknown: t('unknown'), supported: t('supported'), unsupported: t('unsupported'),
+                restoreAuto: t('restoreAuto'),
               }}
               disabled={saving}
               sorting={sorting}
@@ -406,6 +415,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
                 onCatalogChange(items.map(item => byId.get(item.rowId) ?? byId.get(item.id) ?? { id: item.id, name: item.name ?? item.id }))
               }}
               onPatch={(index, patch) => { patchModel(index, patch) }}
+              onRestore={(index, field) => { restoreModelField(index, field) }}
               onRemove={index => { removeModel(index) }}
               onToggle={rowId => { toggleModel(rowId) }}
             />
