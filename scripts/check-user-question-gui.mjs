@@ -31,17 +31,21 @@ try {
   })
   await page.goto(url.href)
   const workspace = env.DSH_QUESTION_WORKSPACE
-  const row = page.getByText(workspace, { exact: true }).first().locator('xpath=ancestor::*[@role="treeitem"][1]')
+  if (await page.locator('button').filter({ hasText: '☰' }).count()) {
+    await page.locator('button').filter({ hasText: '☰' }).first().click()
+  }
+  const row = page.getByRole('treeitem').filter({ hasText: workspace }).first()
   await row.waitFor()
   if (await row.getAttribute('aria-expanded') !== 'true') await row.click()
   await row.hover()
   await page.getByRole('button', { name: 'New session in ' + workspace, exact: true }).click()
+  const input = page.locator('[data-composer-input][contenteditable=true]')
+  await input.waitFor()
   await page.waitForFunction(() => document.body.innerText.includes('Gemini 3.8 Flash'))
   const runtimeLock = process.argv.includes('--runtime-lock')
   const plan = !runtimeLock && process.argv.includes('--plan')
   const article = plan || (!runtimeLock && process.argv.includes('--article'))
   const prompt = runtimeLock ? 'LAB runtime lock pretoken' : article ? 'LAB heading regression' : 'LAB keyless Other question.'
-  const input = page.locator('[data-composer-input][contenteditable=true]')
   const stop = page.getByRole('button', { name: 'Stop generating', exact: true })
   function kind(row) {
     if (/antigravity/i.test(row.group)) return 'agy'
@@ -49,7 +53,14 @@ try {
     return 'other'
   }
   async function openModelRows() {
-    await page.getByRole('button', { name: /^Select model/ }).click()
+    const scrim = page.locator('div.W1sPZW_scrim')
+    if (await scrim.count()) await page.keyboard.press('Escape')
+    const select = page.getByRole('button', { name: /^Select model/ })
+    await select.click()
+    if (!await page.getByRole('menu').isVisible().catch(() => false)) {
+      await page.keyboard.press('Escape')
+      await select.click()
+    }
     await page.getByRole('menu').waitFor()
     if (await page.getByRole('menuitemradio').count() === 0) {
       await page.getByRole('menuitem').filter({ hasText: /^Model/ }).first().click()
@@ -67,7 +78,9 @@ try {
   }
   async function closeModelRows() {
     if (await page.getByRole('menuitemradio').count() > 0) {
-      await page.getByRole('button', { name: /^Select model/ }).click()
+      const scrim = page.locator('div.W1sPZW_scrim')
+    if (await scrim.count()) await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: /^Select model/ }).click()
     }
   }
   if (runtimeLock) {
@@ -107,7 +120,8 @@ try {
     await heading.waitFor({ timeout: 15000 })
     if (plan) {
       await page.getByText('Plan review', { exact: true }).last().waitFor()
-      await page.getByRole('button', { name: 'Keep planning', exact: true }).click()
+      await page.getByRole('button', { name: 'Keep planning', exact: true }).last().click({ force: true })
+      await page.getByRole('button', { name: 'Keep planning', exact: true }).waitFor({ state: 'hidden', timeout: 15000 })
     }
     await page.getByRole('button', { name: 'Stop generating', exact: true }).waitFor({ state: 'hidden' })
     assert.equal(await page.getByPlaceholder('Type your answer', { exact: true }).count(), 0)

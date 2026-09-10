@@ -8,14 +8,18 @@ import { AntigravityActivityStore, type AntigravityActivityEvent } from './activ
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { openDefaultBrowser } from './browser.js'
-import { collapseAntigravityModels } from './catalog.js'
+import { applyCatalogOverlay, collapseAntigravityModels } from './catalog.js'
+import { enrichNativeCatalog } from './enrich.js'
+import { loadModelsDevFacts } from './models-dev.js'
+import type { ModelFacts } from './model-metadata.js'
 import { createAntigravityLlmBridge } from './llm-bridge.js'
 import { installManagedAntigravityRuntime, type ManagedInstallProgress } from './managed-install.js'
 import { probeAntigravityInstallation } from './probe.js'
 import { installAntigravityProvider, type InstalledAntigravityProvider } from './plugin.js'
 import { createAntigravityQuotaReader, type AntigravityQuotaReader } from './quota.js'
 import { registerAcpSettingsRpc } from './rpc.js'
-import { dshHome, loadPersistedConfig, loadPersistedModels, savePersistedConfig, savePersistedModels } from './store.js'
+import { clearPersistedModelFacts, dshHome, loadPersistedConfig, loadPersistedModelFacts, loadPersistedModels, savePersistedConfig, savePersistedModelFacts, savePersistedModels } from './store.js'
+import { parseAntigravityCallbackUrl } from './auth.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
 import { ANTIGRAVITY_SESSION_READY, type AntigravityToolEvent } from './tool-events.js'
 
@@ -58,6 +62,8 @@ function resolvePluginConfig(config: DshPluginConfig, persisted?: AcpAntigravity
     ...(merged.model === undefined || merged.model.trim() === '' ? {} : { model: merged.model.trim() }),
     ...(merged.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: merged.modelDiscoveryTimeoutMs }),
     enabled: merged.enabled !== false,
+    ...(merged.catalogOrder === undefined ? {} : { catalogOrder: merged.catalogOrder }),
+    ...(merged.catalogOverrides === undefined ? {} : { catalogOverrides: merged.catalogOverrides }),
   }
 }
 
@@ -157,6 +163,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   }
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined
+  let pendingAuthorization: AntigravityAuthorizationRequest | undefined
   let probeMessage: string | undefined
   let install: ManagedInstallProgress | undefined
   let installJob: Promise<void> | undefined
@@ -170,6 +177,17 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
   let models: { id: string; name: string }[] = loadPersistedModels(home)
+  let modelFacts = new Map<string, ModelFacts>()
+  let declaredDefaultModelId: string | undefined
+  const AUTH_TIMEOUT_MS = 10 * 60 * 1000
+  let authAttempt: { status: 'pending' | 'failed' | 'expired'; authorizationUrl?: string; expiresAt: number; message?: string } | undefined
+  let signInAbort: AbortController | undefined
+  const bindFacts = (): void => {
+    const stored = loadPersistedModelFacts(home, live.instanceId, live.stateDirectory)
+    modelFacts = stored === undefined ? new Map() : new Map(Object.entries(stored.facts))
+    declaredDefaultModelId = stored?.defaultAgentModelId
+  }
+  bindFacts()
   let quotaReader: AntigravityQuotaReader = createAntigravityQuotaReader(toProviderConfig(live), { getRuntimeVersion: () => installed?.provider.health.version })
 
   const mount = async (next: AcpAntigravitySettingsConfig): Promise<void> => {
@@ -182,14 +200,21 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       await previous?.dispose()
       models = loadPersistedModels(home)
       authorizationUrl = undefined
+      pendingAuthorization = undefined
+      authAttempt = undefined
+      signInAbort?.abort()
+      signInAbort = undefined
       live = next
+      bindFacts()
       quotaReader.invalidate()
       quotaReader = createAntigravityQuotaReader(toProviderConfig(next), { getRuntimeVersion: () => installed?.provider.health.version })
       installed = installAntigravityProvider(
         { externalAgents: registry, settingsEditors: editors },
         toProviderConfig(next),
         { onAuthorizationUrl: (request: AntigravityAuthorizationRequest) => {
+          pendingAuthorization = request
           authorizationUrl = request.authorizationUrl
+          if (authAttempt !== undefined) authAttempt = { ...authAttempt, authorizationUrl: request.authorizationUrl }
           try { openDefaultBrowser(request.authorizationUrl) } catch { /* Settings still shows the URL if the desktop opener is missing. */ }
         } },
       )
@@ -209,7 +234,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       stateDirectory: live.stateDirectory,
       ...(live.model === undefined ? {} : { model: live.model }),
       ...(live.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: live.modelDiscoveryTimeoutMs }),
-      models,
+      models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts), live.catalogOrder, live.catalogOverrides),
+      ...(declaredDefaultModelId === undefined ? {} : { declaredDefaultModelId }),
       installed: !('status' in await validateAntigravityInstallation(toProviderConfig(live))),
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
       live: editor?.status.live ?? false,
@@ -221,22 +247,48 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       })(),
       ...(health?.version === undefined ? {} : { version: health.version }),
       ...(health?.profileDirectory === undefined ? {} : { profileDirectory: health.profileDirectory }),
-      ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
+      ...(function authFields() {
+        const authenticated = editor?.status.authenticated ?? health?.status === 'ready'
+        if (authenticated) return {}
+        const attempt = authAttempt === undefined ? undefined : {
+          status: (Date.now() > authAttempt.expiresAt ? 'expired' : authAttempt.status) as 'pending' | 'failed' | 'expired',
+          ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
+          expiresAt: new Date(authAttempt.expiresAt).toISOString(),
+          ...(authAttempt.message === undefined ? {} : { message: authAttempt.message }),
+        }
+        return {
+          ...(authorizationUrl === undefined ? {} : { authorizationUrl }),
+          ...(attempt === undefined ? {} : { authAttempt: attempt }),
+        }
+      })(),
     }
     return { title: 'External Agents', rows: [row], ...(install === undefined ? {} : { install: { phase: install.phase, downloadedBytes: install.downloadedBytes, totalBytes: install.totalBytes, message: install.message } }), ...(signingIn ? { signingIn: true } : {}) }
   }
 
-  await mount(live)
-  void (async () => {
+  const refreshCatalog = async (signal?: AbortSignal): Promise<void> => {
+    if (installed === undefined) return
+    const listed = await installed.provider.listModels(signal)
+    models = listed.map(model => ({ id: String(model.id), name: model.name }))
+    savePersistedModels(home, models)
     try {
-      if (installed === undefined) return
-      const listed = await installed.provider.listModels()
-      models = listed.map(model => ({ id: String(model.id), name: model.name }))
-      savePersistedModels(home, models)
+      const ccpa = await quotaReader.listModels(signal)
+      declaredDefaultModelId = ccpa.defaultAgentModelId
+      const overlay = await loadModelsDevFacts(models.map(model => model.id), signal === undefined ? {} : { signal }).catch(() => new Map()) // models.dev miss: keep upstream facts only
+      modelFacts = enrichNativeCatalog(models, ccpa, overlay)
+      savePersistedModelFacts(home, {
+        version: 1,
+        instanceId: live.instanceId,
+        stateDirectory: live.stateDirectory,
+        observedAt: new Date().toISOString(),
+        ...(declaredDefaultModelId === undefined ? {} : { defaultAgentModelId: declaredDefaultModelId }),
+        facts: Object.fromEntries(modelFacts),
+      })
     } catch {
-      // Picker keeps the persisted catalog until a later refresh succeeds.
+      // ACP names stay listed; missing facts remain unknown rather than guessed.
     }
-  })()
+  }
+  await mount(live)
+  void refreshCatalog().catch(() => undefined) // catalog probe: UI still shows last snapshot
   if (typeof ctx.inject === 'function') {
     ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
       const adapter = createAntigravityLlmBridge({ registry, getProvider: () => changing || !live.enabled ? undefined : installed?.provider }, () => models, next => { models = [...next]; savePersistedModels(home, models) }, {
@@ -257,7 +309,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         },
         resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
         requestApproval: input => requestNativeApproval(ctx, input),
-      })
+      }, () => modelFacts)
       bridge = adapter
       scope.effect(() => {
         const unregister = scope.llm.registerAdapter(['antigravity'], adapter)
@@ -278,10 +330,12 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
       if (models.length === 0) return { groups: [] }
-      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: collapseAntigravityModels(models) }] }
+      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts), live.catalogOrder, live.catalogOverrides) }] }
     },
     applyConfig: async next => {
-      await mount(next)
+      const remount = next.executablePath !== live.executablePath || next.harnessPath !== live.harnessPath || next.stateDirectory !== live.stateDirectory || next.instanceId !== live.instanceId
+      if (remount) await mount(next)
+      else live = next
       savePersistedConfig(home, next)
     },
     run: async (action, value, signal) => {
@@ -289,10 +343,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (installed === undefined) throw new Error('Antigravity provider is unavailable')
       const editor = editors.require(installed.provider.info.id, providerInstanceId(live.instanceId))
       if (action === 'refresh-models') {
-        const listed = await installed.provider.listModels(signal)
-        models = listed.map(model => ({ id: String(model.id), name: model.name }))
-        savePersistedModels(home, models)
-        return models
+        await refreshCatalog(signal)
+        return collapseAntigravityModels(models, modelFacts)
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }
@@ -302,13 +354,46 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         openDefaultBrowser(authorizationUrl)
         return { opened: true }
       }
+      if (action === 'cancel-login') {
+        signInAbort?.abort()
+        signInAbort = undefined
+        signingIn = false
+        signInJob = undefined
+        pendingAuthorization = undefined
+        authorizationUrl = undefined
+        authAttempt = undefined
+        return { cancelled: true }
+      }
+      if (action === 'complete-login') {
+        if (typeof value !== 'string') throw new Error('Antigravity callback URL is invalid')
+        if (pendingAuthorization === undefined || !signingIn || authAttempt === undefined) throw new Error('Antigravity sign-in is not waiting for a callback')
+        if (Date.now() > authAttempt.expiresAt) {
+          authAttempt = { status: 'expired', expiresAt: Date.now(), message: 'Antigravity sign-in expired.' }
+          throw new Error('Antigravity sign-in expired.')
+        }
+        const pending = pendingAuthorization
+        pendingAuthorization = undefined
+        const callback = parseAntigravityCallbackUrl(value, pending)
+        const response = await fetch(callback, { redirect: 'error', signal: signal ?? AbortSignal.timeout(5000) })
+        await response.arrayBuffer().catch(() => undefined) // drain body so the socket can close
+        return { delivered: true }
+      }
       if (action === 'sign-in') {
         if (signInJob === undefined) {
           signingIn = true
+          signInAbort = new AbortController()
+          const timeout = AbortSignal.timeout(AUTH_TIMEOUT_MS)
+          const combined = signal === undefined ? AbortSignal.any([signInAbort.signal, timeout]) : AbortSignal.any([signInAbort.signal, timeout, signal])
+          authAttempt = { status: 'pending', expiresAt: Date.now() + AUTH_TIMEOUT_MS }
           const provider = installed.provider
-          signInJob = provider.signIn().then(async () => {
-            try { models = (await provider.listModels()).map(model => ({ id: String(model.id), name: model.name })) } catch { /* picker stays empty until a later catalog load */ }
-          }).catch(() => undefined).finally(() => { signingIn = false; signInJob = undefined; quotaReader.invalidate() })
+          signInJob = provider.signIn(combined).then(async () => {
+            authorizationUrl = undefined
+            pendingAuthorization = undefined
+            authAttempt = undefined
+            try { await refreshCatalog() } catch { /* picker stays empty until a later catalog load */ }
+          }).catch(() => {
+            if (authAttempt !== undefined) authAttempt = { status: combined.aborted ? 'expired' : 'failed', expiresAt: authAttempt.expiresAt, message: combined.aborted ? 'Antigravity sign-in expired.' : 'Antigravity sign-in failed.' }
+          }).finally(() => { signingIn = false; signInJob = undefined; signInAbort = undefined; quotaReader.invalidate() })
         }
         return { started: true }
       }
@@ -348,6 +433,12 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           return await editor.run(action, signal)
         } finally {
           models = []
+          modelFacts = new Map()
+          declaredDefaultModelId = undefined
+          clearPersistedModelFacts(home)
+          authorizationUrl = undefined
+          pendingAuthorization = undefined
+          authAttempt = undefined
           changing = false
           quotaReader.invalidate()
         }

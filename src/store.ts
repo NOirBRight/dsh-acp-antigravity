@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { decodeConfig, type AcpAntigravitySettingsConfig } from './client-contract.js'
+import { mergeModelFacts, type ModelFacts } from './model-metadata.js'
 
 export const SETTINGS_FILE_NAME = 'acp-antigravity.settings.json'
 
@@ -76,4 +77,63 @@ export function loadPersistedModels(home: string): { id: string; name: string }[
 export function savePersistedModels(home: string, models: readonly { id: string; name: string }[]): void {
   if (!persistEnabled()) return
   writeJsonAtomically(modelsFilePath(home), models)
+}
+
+export const MODEL_FACTS_FILE_NAME = 'model-facts.json'
+
+function factsFilePath(home: string): string {
+  return join(home, 'plugin-data', 'antigravity', MODEL_FACTS_FILE_NAME)
+}
+
+export interface PersistedModelFacts {
+  readonly version: 1
+  readonly instanceId: string
+  readonly stateDirectory: string
+  readonly observedAt: string
+  readonly defaultAgentModelId?: string
+  readonly facts: Record<string, import('./model-metadata.js').ModelFacts>
+}
+
+/** Load cached CCPA facts for this instance, or undefined when missing/invalid.
+ * @param home DSH_HOME.
+ * @param instanceId live instance.
+ * @param stateDirectory native profile directory.
+ * @returns parsed facts, or undefined.
+ */
+export function loadPersistedModelFacts(home: string, instanceId: string, stateDirectory: string): PersistedModelFacts | undefined {
+  if (!persistEnabled()) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(factsFilePath(home), 'utf8')) as unknown
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    const value = parsed as PersistedModelFacts
+    if (value.version !== 1 || value.instanceId !== instanceId || value.stateDirectory !== stateDirectory) return undefined
+    if (typeof value.observedAt !== 'string' || typeof value.facts !== 'object' || value.facts === null) return undefined
+    const facts: PersistedModelFacts['facts'] = {}
+    for (const [id, item] of Object.entries(value.facts)) {
+      if (typeof id !== 'string' || typeof item !== 'object' || item === null) continue
+      const merged = mergeModelFacts(item as Partial<ModelFacts>)
+      facts[id] = merged
+    }
+    return { ...value, facts }
+  } catch {
+    // Missing or invalid facts cache is treated as never observed.
+    return undefined
+  }
+}
+
+/** Write cached CCPA facts.
+ * @param home DSH_HOME.
+ * @param value facts document.
+ */
+export function savePersistedModelFacts(home: string, value: PersistedModelFacts): void {
+  if (!persistEnabled()) return
+  writeJsonAtomically(factsFilePath(home), value)
+}
+
+/** Drop cached CCPA facts.
+ * @param home DSH_HOME.
+ */
+export function clearPersistedModelFacts(home: string): void {
+  if (!persistEnabled()) return
+  try { unlinkSync(factsFilePath(home)) } catch { /* missing facts cache is already empty */ }
 }

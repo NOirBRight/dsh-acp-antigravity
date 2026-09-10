@@ -71,7 +71,7 @@ describe('Antigravity LLM bridge', () => {
     }, () => cached, next => { cached = [...next] })
     const pending = adapter.resolveModel('antigravity', 'gemini-3.8-flash-high')
     resolveList([{ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High' }, { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash Low' }])
-    await expect(pending).resolves.toMatchObject({ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash High' })
+    await expect(pending).resolves.toMatchObject({ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High' })
     await adapter.dispose()
   })
 
@@ -83,6 +83,19 @@ describe('Antigravity LLM bridge', () => {
       openSession: async () => ({ ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined, runTurn: async () => ({ status: 'completed', text: '' }) }),
     })
     await expect(adapter.resolveModel('antigravity', 'gemini-3.8-flash-high')).rejects.toThrow('Antigravity model catalog is unavailable')
+    await adapter.dispose()
+  })
+
+  it('echoes the default routing alias without listing it as a catalog row', async () => {
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [{ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High' }],
+      openSession: async () => ({ ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined, runTurn: async () => ({ status: 'completed', text: '' }) }),
+    })
+    await expect(adapter.resolveModel('antigravity', 'default')).resolves.toMatchObject({ id: 'default' })
+    const listed = await adapter.listModels('antigravity')
+    expect(listed.map(model => model.id)).not.toContain('default')
     await adapter.dispose()
   })
 
@@ -143,7 +156,7 @@ describe('Antigravity LLM bridge', () => {
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
   })
 
-  it('forwards ACP usage into the LLM stream', async () => {
+  it('forwards validated ACP usage into the LLM stream before finish', async () => {
     const adapter = bridgeWithStubProvider({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
@@ -164,11 +177,10 @@ describe('Antigravity LLM bridge', () => {
     for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }], sessionId: 's-anon-go' })) {
       chunks.push(chunk as { type: string; usage?: { inputTokens?: number; outputTokens?: number } })
     }
-    const usages = chunks.filter(chunk => chunk.type === 'usage')
-    expect(usages).toHaveLength(2)
-    expect(usages[0]?.usage).toMatchObject({ inputTokens: 11, outputTokens: 7, usageComplete: false })
-    expect(usages[1]?.usage).toMatchObject({ inputTokens: 11, outputTokens: 7 })
-    expect(usages[1]?.usage).not.toHaveProperty('usageComplete')
+    const usage = chunks.filter(chunk => chunk.type === 'usage')
+    expect(usage).toHaveLength(1)
+    expect(usage[0]).toMatchObject({ type: 'usage', usage: { inputTokens: 11, outputTokens: 7 } })
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
   })
 
   it('emits no usage without a provider-reported source', async () => {
@@ -479,8 +491,9 @@ describe('Antigravity LLM bridge', () => {
       openSession: async () => ({
         ref: validRef(),
         supportedModes: [...VALID_MODES],
-        runTurn: async (_turn: unknown, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[] }) => Promise<unknown> }) => {
+        runTurn: async (turn: { prompt: string }, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[] }) => Promise<unknown> }) => {
           await turnHost.publish({ type: 'assistant-delta', text: 'done' })
+          if (turn.prompt !== 'go') return { status: 'completed', text: 'done' }
           captured.push(await turnHost.requestUserInput({
             requestId: optionId('q-label'),
             question: 'Pick one',
@@ -538,8 +551,9 @@ describe('Antigravity LLM bridge', () => {
       openSession: async () => ({
         ref: validRef(),
         supportedModes: [...VALID_MODES],
-        runTurn: async (_turn: unknown, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[]; multiple?: boolean }) => Promise<unknown> }) => {
+        runTurn: async (turn: { prompt: string }, turnHost: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: string; question: string; options?: string[]; multiple?: boolean }) => Promise<unknown> }) => {
           await turnHost.publish({ type: 'assistant-delta', text: 'done' })
+          if (turn.prompt !== 'go') return { status: 'completed', text: 'done' }
           captured.push(await turnHost.requestUserInput({
             requestId: optionId('q-mix'),
             question: 'Choose',
@@ -565,6 +579,35 @@ describe('Antigravity LLM bridge', () => {
       multiSelect: true,
       options: [{ label: 'Red' }, { label: 'Blue' }],
     })
+  })
+
+  it('prompts native again with Other text after the first turn completes', async () => {
+    const prompts: string[] = []
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(),
+        supportedModes: [...VALID_MODES],
+        runTurn: async (request: { prompt: string }, host: { publish: (event: { type: string; text: string }) => Promise<void>; requestUserInput: (request: { requestId: ReturnType<typeof optionId>; question: string; options?: string[] }) => Promise<unknown> }) => {
+          prompts.push(request.prompt)
+          if (request.prompt === 'go') {
+            await host.requestUserInput({ requestId: optionId('q-other'), question: 'Pick one', options: ['Yes'] })
+            await host.publish({ type: 'assistant-delta', text: 'asked' })
+            return { status: 'completed', text: 'asked' }
+          }
+          await host.publish({ type: 'assistant-delta', text: 'got it' })
+          return { status: 'completed', text: 'got it' }
+        },
+        dispose: async () => undefined,
+      }),
+    } as never, undefined, undefined, {
+      ask: async () => ({ answers: [{ id: 'q-other', selected: [], custom: 'my free text' }] }),
+    })
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }] })) void chunk
+    expect(prompts).toEqual(['go', 'my free text'])
+    await adapter.dispose()
   })
 
   it('follows host policy changes on a reused native session', async () => {

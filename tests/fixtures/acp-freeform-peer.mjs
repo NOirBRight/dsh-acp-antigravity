@@ -33,6 +33,7 @@ function promptText(params) {
 }
 
 const ARTICLE_PROMPT = 'LAB heading regression'
+const OTHER_PROMPT = 'LAB keyless Other question.'
 const RUNTIME_LOCK_PROMPT = 'LAB runtime lock pretoken'
 const ARTICLE = '# 计算的演化史与智能基础设施的未来构建' + String.fromCharCode(10) + String.fromCharCode(10) + '计算从算盘与机械装置走到电力与晶体管，再进入可编程计算机与大规模集成电路。每一次跃迁都把如何表示问题与如何稳定执行重新绑在一起，算法、存储、网络与能源成为同一套基础设施。今日的智能系统并不只是更大的模型，而是把数据、调度、工具与人机界面连成可运行的整体。文中出现的 Proceed 与 plan.md 只是普通叙述用语，用来说明标题和常见英文词并不会把一篇文章变成待批准的计划。'
 const APPROVED_CONTINUATION = 'The user approved the plan. Carry it out now.'
@@ -79,6 +80,18 @@ async function handlePrompt(req) {
     send({ jsonrpc: '2.0', id: req.id, result: { stopReason: 'end_turn' } })
     return
   }
+  if (!asked.includes(ARTICLE_PROMPT) && !asked.includes(RUNTIME_LOCK_PROMPT) && !asked.includes(OTHER_PROMPT) && asked.trim() !== '') {
+    send({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Received Other: ' + asked.trim() } },
+      },
+    })
+    send({ jsonrpc: '2.0', id: req.id, result: { stopReason: 'end_turn' } })
+    return
+  }
   if (asked.includes(RUNTIME_LOCK_PROMPT)) {
     try {
       await new Promise((resolve, reject) => {
@@ -108,7 +121,6 @@ async function handlePrompt(req) {
         { optionId: '1', kind: 'allow_once', name: 'First' },
         { optionId: '2', kind: 'allow_once', name: 'Second' },
       ],
-      _meta: { 'agy.supportsFreeform': true },
     })
   } catch (error) {
     if (cancelled) {
@@ -123,20 +135,10 @@ async function handlePrompt(req) {
     return
   }
   const outcome = isRecord(response) && isRecord(response.outcome) ? response.outcome.outcome : undefined
-  const meta = isRecord(response) && isRecord(response._meta) ? response._meta : undefined
-  const text = meta !== undefined && typeof meta['agy.freeformResponse'] === 'string' ? meta['agy.freeformResponse'] : undefined
-  if (outcome !== 'cancelled' || text === undefined) {
-    fail(req.id, 'expected cancelled freeformResponse, got ' + JSON.stringify(response), -32602)
+  if (outcome !== 'cancelled') {
+    fail(req.id, 'expected cancelled Other, got ' + JSON.stringify(response), -32602)
     return
   }
-  send({
-    jsonrpc: '2.0',
-    method: 'session/update',
-    params: {
-      sessionId,
-      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Received Other: ' + text } },
-    },
-  })
   send({ jsonrpc: '2.0', id: req.id, result: { stopReason: 'end_turn' } })
 }
 

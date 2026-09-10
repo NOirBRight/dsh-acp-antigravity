@@ -82,7 +82,7 @@ export function NativeTurnContainer(props: { readonly node: ChatNode<'antigravit
   return <section data-antigravity-native-turn={turn} style={wrap}>
     {label === undefined ? null : <p style={head}>{label}</p>}
     {branches.map(branch => {
-      const ms = Date.parse(branch.kind === 'tool' ? branch.row.firstSeenAt : branch.kind === 'text' ? branch.firstSeenAt : branch.firstSeenAt)
+      const ms = Date.parse('firstSeenAt' in branch ? branch.firstSeenAt : branch.row.firstSeenAt)
       const unattributed = !isOwnedByTurn(ms, startMs, endMs)
       return <React.Fragment key={branch.key}>
         {unattributed ? <p data-native-unattributed style={head}>{props.t('activityBetweenTurns')}</p> : null}

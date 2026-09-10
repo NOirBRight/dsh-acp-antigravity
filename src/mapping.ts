@@ -9,7 +9,7 @@ import {
 } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import { toolOwnershipOf, withToolOwnership } from './tool-events.js'
-import { acpUsage } from './usage.js'
+import { acpUsage, withTelemetryKeys } from './usage.js'
 import { decodeRequestTelemetry, decodeUsageSnapshots, type AntigravityUsageEvent } from './request-telemetry.js'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -51,8 +51,6 @@ export function parseAntigravityModels(value: unknown): readonly ExternalAgentMo
 export function resolveAntigravityModel(selected: string | undefined, models: readonly ExternalAgentModel[]): ExternalAgentModel {
   const requested = selected ?? ANTIGRAVITY_DEFAULT_MODEL
   const found = models.find(model => String(model.id) === requested)
-    ?? models.find(model => String(model.id) === requested + '-high')
-    ?? models.find(model => String(model.id).startsWith(requested + '-'))
   if (!found) throw new Error('Antigravity model is unavailable: ' + requested)
   return found
 }
@@ -121,7 +119,7 @@ export function normalizeAntigravitySessionUpdate(update: unknown, bounds: Exter
     return boundExternalAgentEvent({ type: 'plan-update', summary, steps }, bounds)
   }
   if (tag === 'usage_update' || tag === 'usage') {
-    const usage = acpUsage(update)
+    const usage = acpUsage(withTelemetryKeys(update))
     return usage === undefined ? null : { type: 'usage', ...usage }
   }
   if (tag === 'session_info_update' && isRecord(update._meta) && ('agy.requestTelemetry' in update._meta || 'agy.usageSnapshots' in update._meta)) {

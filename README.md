@@ -6,11 +6,21 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 
 ## Install and verify
 
-The ACP library is pinned to its versioned GitHub release. Install the shared Provider UI and the read-only tool-card compatibility artifact alongside this bundle; no sibling checkout is required. The tool-card artifact is an explicitly versioned, unofficial additive build of DSH rc.1, not an npm release by the upstream project.
+Install every required package in one command. `dsh-acp-provider` is a profile dependency with no bundle of its own; omitting it leaves Antigravity unable to load. The tool-card artifact is an unofficial additive build of DSH rc.1, not an upstream npm release. Model Switch owns the composer picker and runtime lock used with Antigravity.
 
 ```sh
-dsh plugin --profile web add https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.10/dsh-llm-providers-ui-0.1.10.tgz https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.3/deepseek-ai-dsh-acp-antigravity-0.1.3.tgz
+dsh plugin --profile web add --force \
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz \
+  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui.tgz \
+  https://github.com/NOirBRight/dsh-acp-provider/releases/latest/download/deepseek-ai-dsh-acp-provider.tgz \
+  https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch.tgz \
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-dsh-acp-antigravity.tgz
+dsh plugin --profile web list
 ```
+
+Then open Settings → Antigravity → Install. That downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` (Windows: `.exe`). Linux and Windows use the stock binaries as shipped. The plugin tarball does not ship Google binaries and does not patch them. Point the card at an existing pair if you already have one.
+
+Restart the Web profile after installation. Sign in with personal Google OAuth on the Antigravity card.
 
 For source verification with the published dependency pins:
 
@@ -109,7 +119,7 @@ The command checks each TypeScript face and runs keyless tests against only the 
 
 ## Host composition
 
-A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and adds no conversation tabs. The official Chat and Trajectory views remain unchanged. ACP tool activity is stored in plugin-owned history, never as a durable DSH tool-call event or execution, nor as assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark. The client build bundles shared-library values rather than treating them as browser plugins, and its build check rejects non-platform external imports. Stock `@deepseek-ai/dsh-client-ui-tool` 0.1.2-rc.1 lacks the public card export; the installation command above includes the published 0.1.2-rc.1-native.1 compatibility artifact. This is the supported artifact combination, rather than an implicit local patch.
+A DSH web profile loads this package as a bundle. The host plugin registers RPC; the `./client` entry contributes the Antigravity card to `settings.provider.item`, registers its Provider Directory role as Agent, and adds no conversation tabs. The official Chat and Trajectory views remain unchanged. ACP tool activity is stored in plugin-owned history, never as a durable DSH tool-call event or execution, nor as assistant transcript text. Install Antigravity downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` into a DSH-managed directory. Linux and Windows use the stock binaries. The card can also locate an existing pair, sign in with personal Google OAuth, and refresh account-visible models. The plugin does not ship Google binaries or an unverified brand mark. The client build bundles shared-library values rather than treating them as browser plugins, and its build check rejects non-platform external imports. Stock `@deepseek-ai/dsh-client-ui-tool` 0.1.2-rc.1 lacks the public card export; the installation command above includes the published 0.1.2-rc.1-native.1 compatibility artifact. This is the supported artifact combination, rather than an implicit local patch.
 
 installAntigravityProvider() remains the library mount for hosts that own their own registry. The LLM bridge supports native turns, permission prompts, cancellation and resume. Reading saved history does not require native execution; continuing a native turn still requires the runtime and authentication.
 

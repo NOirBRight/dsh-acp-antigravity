@@ -74,6 +74,21 @@ export function apply(ctx: ClientContext): void {
     return decoded
   }
   const save: AcpSettingsFace['save'] = async (row: AcpSettingsRow) => {
+    const catalogOrder = row.models.map(model => model.id).filter(id => id.trim().length > 0)
+    const catalogOverrides: Record<string, (typeof row.models)[number]> = {}
+    for (const model of row.models) {
+      const flags = model.overrides
+      if (flags === undefined) continue
+      const over: { -readonly [K in keyof (typeof row.models)[number]]?: (typeof row.models)[number][K] } = { id: model.id, name: model.name }
+      if (flags.vision === true && typeof model.vision === 'boolean') over.vision = model.vision
+      if (flags.thinking === true && typeof model.thinking === 'boolean') over.thinking = model.thinking
+      if (flags.contextWindow === true && model.contextWindow !== undefined) over.contextWindow = model.contextWindow
+      if (flags.output === true && model.maxOutputTokens !== undefined) over.maxOutputTokens = model.maxOutputTokens
+      if (flags.defaultEffort === true && model.reasoning?.defaultEffort !== undefined) {
+        over.reasoning = { efforts: model.reasoning.efforts, defaultEffort: model.reasoning.defaultEffort }
+      }
+      if (Object.keys(flags).length > 0) catalogOverrides[model.id] = { id: model.id, name: model.name, ...over }
+    }
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SAVE_ENDPOINT, {
       executablePath: row.executablePath,
       harnessPath: row.harnessPath,
@@ -82,6 +97,8 @@ export function apply(ctx: ClientContext): void {
       ...(row.model === undefined ? {} : { model: row.model }),
       ...(row.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: row.modelDiscoveryTimeoutMs }),
       enabled: row.enabled,
+      catalogOrder,
+      ...(Object.keys(catalogOverrides).length === 0 ? {} : { catalogOverrides }),
     }, undefined)
     if (!result.ok) throw new Error(result.error.message)
   }

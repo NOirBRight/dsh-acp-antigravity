@@ -56,9 +56,8 @@ async function handleInteractionQuestion(host: ExternalAgentTurnHost, params: un
   const matchingLabels = options.filter((_option, index) => request.options?.[index] === answer.answers[0])
   const selected = answer.custom === undefined ? exact ?? (matchingLabels.length === 1 ? matchingLabels[0] : undefined) : undefined
   if (selected !== undefined) return { outcome: { outcome: 'selected', optionId: selected.native } }
-  if (!isRecord(params._meta) || params._meta['agy.supportsFreeform'] !== true) throw new Error('This native runtime does not support custom question answers')
-  // Native SDK maps Other text through cancelled + freeform metadata; no offered option was selected.
-  return { outcome: { outcome: 'cancelled' }, _meta: { 'agy.freeformResponse': answer.custom ?? answer.answers[0] } }
+  // stock ACP cannot carry Other in the permission result; llm-bridge follows up with session/prompt.
+  return { outcome: { outcome: 'cancelled' } }
 }
 
 async function handlePermission(host: ExternalAgentTurnHost, params: unknown, id: string): Promise<unknown> {

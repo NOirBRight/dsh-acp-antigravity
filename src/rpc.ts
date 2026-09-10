@@ -40,7 +40,7 @@ function activityError(error: unknown): string {
 /** Live Settings operations owned by the host plugin. */
 export interface AcpSettingsRpcDeps {
   snapshot(): Promise<AcpSettingsSnapshot>
-  catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string; reasoning?: { efforts: readonly { id: string; name: string }[]; defaultEffort: string } }[] }[] }>
+  catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string; reasoning?: { efforts: readonly { id: string; name: string }[]; defaultEffort?: string } }[] }[] }>
   quota(): Promise<AntigravityQuotaSnapshot>
   readActivity(sessionId: string): AntigravityActivityHistory
   applyConfig(config: AcpAntigravitySettingsConfig): Promise<void>

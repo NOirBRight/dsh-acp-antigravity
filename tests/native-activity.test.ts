@@ -324,22 +324,10 @@ describe('Antigravity tool row renderer', () => {
     })
   })
 
-  it('renders a dedicated empty child panel without claiming unknown status', () => {
-    const branches = groupNativeActivity([], [{
+  it('does not invent a child panel from observations without tools', () => {
+    expect(groupNativeActivity([], [{
       key: '1', epoch: 1, firstSeenAt: T0,
       ownership: { trajectoryId: 'ec725c19-66d3-48e1-b35f-fa0fe5453fb7', parentTrajectoryId: 'root' },
-    }])
-    const markup = renderToStaticMarkup(createElement(NativeActivityNode, {
-      branch: branches[0]!,
-      t: (key: keyof typeof en) => en[key],
-      conversationT: conversationT as TranslateNS<'conversation'>,
-    }))
-    expect(markup).toContain('data-native-subagent-panel')
-    expect(markup).toContain('data-state="running"')
-    expect(markup).toContain('Subagent ec725c19')
-    expect(markup).toContain(en.activityRunning.replace('{count}', '1'))
-    expect(markup).toContain(en.activityChildEmpty)
-    expect(markup).not.toContain(en.activityChildUnknown)
-    expect(markup).not.toMatch(/0 native tools/)
+    }])).toEqual([])
   })
 })

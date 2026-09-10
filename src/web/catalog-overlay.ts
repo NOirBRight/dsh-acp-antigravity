@@ -4,7 +4,7 @@ import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT } from '../client-contract.j
 export interface CatalogGroup {
   readonly id: string
   readonly name: string
-  readonly models: readonly { readonly id: string; readonly name: string; readonly description?: string; readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort: string } }[]
+  readonly models: readonly { readonly id: string; readonly name: string; readonly description?: string; readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string } }[]
 }
 
 export interface DirectorySnapshot {

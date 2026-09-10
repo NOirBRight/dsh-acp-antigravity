@@ -18,6 +18,32 @@ export interface AcpAntigravitySettingsConfig {
   readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly enabled: boolean
+  readonly catalogOrder?: readonly string[]
+  readonly catalogOverrides?: Readonly<Record<string, AcpCatalogModel>>
+}
+
+/** One collapsed catalog row shown in Settings and the composer picker. */
+export interface AcpCatalogModel {
+  readonly id: string
+  readonly name: string
+  readonly nativeIds?: readonly string[]
+  readonly effortMap?: Readonly<Record<string, string>>
+  readonly vision?: boolean
+  readonly thinking?: boolean
+  readonly inputTokenLimit?: number
+  readonly maxOutputTokens?: number
+  readonly contextWindow?: number
+  readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string }
+  readonly sources?: Readonly<Record<string, string>>
+  readonly overrides?: Readonly<Record<string, boolean>>
+}
+
+/** Host-owned Google sign-in attempt. Absent when already authenticated. */
+export interface AcpAuthAttempt {
+  readonly status: 'pending' | 'failed' | 'expired'
+  readonly authorizationUrl?: string
+  readonly expiresAt?: string
+  readonly message?: string
 }
 
 /** One provider card on the External Agents page. */
@@ -31,7 +57,9 @@ export interface AcpSettingsRow {
   readonly stateDirectory: string
   readonly model?: string
   readonly modelDiscoveryTimeoutMs?: number
-  readonly models: readonly { readonly id: string; readonly name: string }[]
+  readonly models: readonly AcpCatalogModel[]
+  readonly declaredDefaultModelId?: string
+  readonly authAttempt?: AcpAuthAttempt
   readonly installed: boolean
   readonly authenticated: boolean
   readonly live: boolean
@@ -62,6 +90,56 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Decode freshly refreshed catalog rows from the host RPC. */
+export function decodeCatalogModels(value: unknown): AcpCatalogModel[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const models: AcpCatalogModel[] = []
+  for (const item of value) {
+    const decoded = decodeCatalogModel(item)
+    if (decoded === undefined) return undefined
+    models.push(decoded)
+  }
+  return models
+}
+
+function decodeCatalogModel(value: unknown): AcpCatalogModel | undefined {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string') return undefined
+  const vision = typeof value.vision === 'boolean' ? value.vision : undefined
+  const thinking = typeof value.thinking === 'boolean' ? value.thinking : undefined
+  const inputTokenLimit = typeof value.inputTokenLimit === 'number' && Number.isSafeInteger(value.inputTokenLimit) && value.inputTokenLimit > 0 ? value.inputTokenLimit : undefined
+  const maxOutputTokens = typeof value.maxOutputTokens === 'number' && Number.isSafeInteger(value.maxOutputTokens) && value.maxOutputTokens > 0 ? value.maxOutputTokens : undefined
+  const contextWindow = typeof value.contextWindow === 'number' && Number.isSafeInteger(value.contextWindow) && value.contextWindow > 0 ? value.contextWindow : undefined
+  return {
+    id: value.id,
+    name: value.name,
+    ...(Array.isArray(value.nativeIds) && value.nativeIds.every(item => typeof item === 'string') ? { nativeIds: value.nativeIds } : {}),
+    ...(isRecord(value.effortMap) ? { effortMap: Object.fromEntries(Object.entries(value.effortMap).filter(entry => typeof entry[1] === 'string')) as Record<string, string> } : {}),
+    ...(vision === undefined ? {} : { vision }),
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(inputTokenLimit === undefined ? {} : { inputTokenLimit }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(isRecord(value.reasoning) && Array.isArray(value.reasoning.efforts)
+      ? { reasoning: {
+        efforts: value.reasoning.efforts.flatMap(item => isRecord(item) && typeof item.id === 'string' && typeof item.name === 'string' ? [{ id: item.id, name: item.name }] : []),
+        ...(typeof value.reasoning.defaultEffort === 'string' ? { defaultEffort: value.reasoning.defaultEffort } : {}),
+      } }
+      : {}),
+    ...(isRecord(value.sources) ? { sources: Object.fromEntries(Object.entries(value.sources).filter(entry => typeof entry[1] === 'string')) as Record<string, string> } : {}),
+    ...(isRecord(value.overrides) ? { overrides: Object.fromEntries(Object.entries(value.overrides).filter(entry => entry[1] === true)) as Record<string, boolean> } : {}),
+  }
+}
+
+function decodeAuthAttempt(value: unknown): AcpAuthAttempt | undefined {
+  if (!isRecord(value) || (value.status !== 'pending' && value.status !== 'failed' && value.status !== 'expired')) return undefined
+  return {
+    status: value.status,
+    ...(typeof value.authorizationUrl === 'string' ? { authorizationUrl: value.authorizationUrl } : {}),
+    ...(typeof value.expiresAt === 'string' ? { expiresAt: value.expiresAt } : {}),
+    ...(typeof value.message === 'string' ? { message: value.message } : {}),
+  }
+}
+
 /** Decode a Settings snapshot from the host RPC. */
 export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined {
   if (!isRecord(value) || value.title !== 'External Agents' || !Array.isArray(value.rows)) return undefined
@@ -74,10 +152,11 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
     if (typeof row.enabled !== 'boolean' || typeof row.executablePath !== 'string' || typeof row.harnessPath !== 'string') return undefined
     if (typeof row.stateDirectory !== 'string' || typeof row.installed !== 'boolean' || typeof row.authenticated !== 'boolean') return undefined
     if (typeof row.live !== 'boolean' || typeof row.ready !== 'boolean' || !Array.isArray(row.models)) return undefined
-    const models: { id: string; name: string }[] = []
+    const models: AcpCatalogModel[] = []
     for (const model of row.models) {
-      if (!isRecord(model) || typeof model.id !== 'string' || typeof model.name !== 'string') return undefined
-      models.push({ id: model.id, name: model.name })
+      const decoded = decodeCatalogModel(model)
+      if (decoded === undefined) return undefined
+      models.push(decoded)
     }
     rows.push({
       provider: row.provider,
@@ -90,6 +169,11 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
       ...(typeof row.model === 'string' ? { model: row.model } : {}),
       ...(modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs }),
       models,
+      ...(typeof row.declaredDefaultModelId === 'string' ? { declaredDefaultModelId: row.declaredDefaultModelId } : {}),
+      ...((): { authAttempt?: AcpAuthAttempt } => {
+        const attempt = decodeAuthAttempt(row.authAttempt)
+        return attempt === undefined ? {} : { authAttempt: attempt }
+      })(),
       installed: row.installed,
       authenticated: row.authenticated,
       live: row.live,
@@ -113,6 +197,7 @@ export function decodeConfig(value: unknown): AcpAntigravitySettingsConfig | und
   if (typeof value.enabled !== 'boolean') return undefined
   if (value.modelDiscoveryTimeoutMs !== undefined && (typeof value.modelDiscoveryTimeoutMs !== 'number' || !Number.isInteger(value.modelDiscoveryTimeoutMs) || value.modelDiscoveryTimeoutMs < 1 || value.modelDiscoveryTimeoutMs > 0xffffffff)) return undefined
   if (value.model !== undefined && (typeof value.model !== 'string' || value.model.trim() === '')) return undefined
+  const catalog = decodeCatalogPersistence(value)
   return {
     executablePath: value.executablePath,
     harnessPath: value.harnessPath,
@@ -121,6 +206,7 @@ export function decodeConfig(value: unknown): AcpAntigravitySettingsConfig | und
     ...(value.model === undefined ? {} : { model: value.model.trim() }),
     ...(value.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: value.modelDiscoveryTimeoutMs }),
     enabled: value.enabled,
+    ...catalog,
   }
 }
 
@@ -155,6 +241,39 @@ export interface AntigravityQuotaSnapshot {
   readonly observedAt: string
   readonly tier?: { readonly current?: string; readonly paid?: string }
   readonly message?: string
+}
+
+function decodeCatalogPersistence(value: Record<string, unknown>): Pick<AcpAntigravitySettingsConfig, 'catalogOrder' | 'catalogOverrides'> {
+  if (Array.isArray(value.catalogOrder)) {
+    const order = value.catalogOrder.filter((id): id is string => typeof id === 'string')
+    const overrides: Record<string, AcpCatalogModel> = {}
+    if (isRecord(value.catalogOverrides)) {
+      for (const [id, item] of Object.entries(value.catalogOverrides)) {
+        const decoded = decodeCatalogModel(item)
+        if (decoded !== undefined) overrides[id] = decoded
+      }
+    }
+    return {
+      catalogOrder: order,
+      ...(Object.keys(overrides).length === 0 ? {} : { catalogOverrides: overrides }),
+    }
+  }
+  // Live snapshot rows carry `models` as the displayed catalog, not a user
+  // overlay. Only an explicit catalogOverlay array is a persisted membership.
+  const raw = Array.isArray(value.catalogOverlay) ? value.catalogOverlay : undefined
+  if (raw === undefined) return {}
+  const order: string[] = []
+  const overrides: Record<string, AcpCatalogModel> = {}
+  for (const item of raw) {
+    const decoded = decodeCatalogModel(item)
+    if (decoded === undefined) continue
+    if (!order.includes(decoded.id)) order.push(decoded.id)
+    overrides[decoded.id] = decoded
+  }
+  return {
+    ...(order.length === 0 ? {} : { catalogOrder: order }),
+    ...(Object.keys(overrides).length === 0 ? {} : { catalogOverrides: overrides }),
+  }
 }
 
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {

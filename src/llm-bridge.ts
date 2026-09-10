@@ -14,12 +14,12 @@ import {
   type ExternalAgentUserInputAnswers,
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
-import type { StreamChunk, TokenUsage, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
-import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort } from './catalog.js'
+import type { StreamChunk, ResolvedRetryPolicy, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CollapsedAntigravityModel } from './catalog.js'
+import type { ModelFacts } from './model-metadata.js'
 import { isRecord } from './decode.js'
-import { reportedUsage, sumTurnUsage } from './usage.js'
-import { decodeRequestTelemetry, decodeUsageSnapshots, requestThroughput, sdkUsage, type RequestThroughput } from './request-telemetry.js'
-import { ANTIGRAVITY_USER_QUESTION_ANSWER, ANTIGRAVITY_USAGE_SNAPSHOTS, ANTIGRAVITY_REQUEST_TELEMETRY, ANTIGRAVITY_AGENT_OBSERVED, ANTIGRAVITY_AGENT_TEXT, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
+import { acpUsage, reportedUsage, withTelemetryKeys } from './usage.js'
+import { ANTIGRAVITY_USER_QUESTION_ANSWER, ANTIGRAVITY_AGENT_OBSERVED, ANTIGRAVITY_AGENT_TEXT, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
 
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
@@ -116,6 +116,45 @@ function textOf(value: unknown): string {
   return ''
 }
 
+export interface AntigravityResolvedModel {
+  readonly provider: string
+  readonly id: string
+  readonly name: string
+  readonly inputModalities?: readonly ('text' | 'image')[]
+  readonly context?: { readonly contextWindow: number }
+  readonly defaultMaxTokens?: number
+  readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string }
+}
+
+function collapseCatalog(native: readonly { id: string; name: string }[], facts?: ReadonlyMap<string, ModelFacts>): readonly CollapsedAntigravityModel[] {
+  return collapseAntigravityModels(native, facts ?? new Map())
+}
+
+function findCollapsed(collapsed: readonly CollapsedAntigravityModel[], model: string): CollapsedAntigravityModel | undefined {
+  return collapsed.find(item => item.id === model)
+    ?? collapsed.find(item => item.nativeIds.includes(model))
+    ?? collapsed.find(item => item.id === peelEffort(model).logical)
+}
+
+function toResolvedModel(provider: string, requested: string, found: CollapsedAntigravityModel): AntigravityResolvedModel {
+  const id = found.nativeIds.includes(requested) || found.id === requested ? requested : found.id
+  const efforts = found.reasoning?.efforts ?? []
+  return {
+    provider,
+    id,
+    name: found.name,
+    ...(found.vision === true ? { inputModalities: ['text', 'image'] as const } : found.vision === false ? { inputModalities: ['text'] as const } : {}),
+    ...(found.contextWindow === undefined ? {} : { context: { contextWindow: found.contextWindow } }),
+    ...(found.maxOutputTokens === undefined ? {} : { defaultMaxTokens: found.maxOutputTokens }),
+    ...(efforts.length === 0 ? {} : {
+      reasoning: {
+        efforts,
+        ...(found.reasoning?.defaultEffort === undefined ? {} : { defaultEffort: found.reasoning.defaultEffort }),
+      },
+    }),
+  }
+}
+
 type StreamOptions = {
   provider: string
   model: string
@@ -133,13 +172,14 @@ export function createAntigravityLlmBridge(
   getCachedModels?: () => readonly { id: string; name: string }[],
   setCachedModels?: (models: readonly { id: string; name: string }[]) => void,
   hostAsk?: BridgeHost,
+  getCachedFacts?: () => ReadonlyMap<string, ModelFacts>,
 ): {
   providerInfo(provider: string): { id: string; name: string }
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy
   imageRequestPricing(_provider: string, _model: string): undefined
   listModels(provider: string): Promise<readonly { provider: string; id: string; name: string }[]>
-  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<{ provider: string } & ReturnType<typeof collapseAntigravityModels>[number]>
-  prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: { provider: string } & ReturnType<typeof collapseAntigravityModels>[number]; stream: (options: StreamOptions) => AsyncIterable<Chunk> }>
+  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<AntigravityResolvedModel>
+  prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{ model: AntigravityResolvedModel; stream: (options: StreamOptions) => AsyncIterable<Chunk> }>
   stream(options: StreamOptions): AsyncIterable<Chunk>
   reset(): Promise<void>
   release(session: string): Promise<void>
@@ -158,6 +198,9 @@ export function createAntigravityLlmBridge(
     },
   })
   let listing: Promise<readonly { id: string; name: string }[]> | undefined
+  function collapseNative(native: readonly { id: string; name: string }[]): readonly CollapsedAntigravityModel[] {
+    return collapseCatalog(native, getCachedFacts?.())
+  }
   /** Cached native catalog. `wait` is for resolve/stream; picker `listModels` must not wait. */
   function nativeModels(wait: boolean): Promise<readonly { id: string; name: string }[]> {
     const cached = getCachedModels?.() ?? []
@@ -184,17 +227,22 @@ export function createAntigravityLlmBridge(
     imageRequestPricing: () => undefined,
     listModels: async provider => {
       const native = await nativeModels(false)
-      return collapseAntigravityModels(native).map(model => ({ provider, ...model }))
+      return collapseNative(native).map(model => ({ provider, id: model.id, name: model.name }))
     },
     resolveModel: async (provider, model) => {
       const natives = await nativeModels(true)
-      const collapsed = collapseAntigravityModels(natives)
-      const found = collapsed.find(item => item.id === model) ?? collapsed.find(item => item.id === peelEffort(model).logical)
+      const collapsed = collapseNative(natives)
+      if (model === 'default') {
+        const found = collapsed[0]
+        if (found === undefined) throw new Error('Antigravity model catalog is unavailable')
+        return { ...toResolvedModel(provider, found.id, found), id: 'default' }
+      }
+      const found = findCollapsed(collapsed, model)
       if (found === undefined) {
         if (natives.length === 0) throw new Error('Antigravity model catalog is unavailable')
         throw new Error('Unknown Antigravity model: ' + model)
       }
-      return { provider, ...found }
+      return toResolvedModel(provider, model, found)
     },
     async prepareCall(provider, model, signal) {
       const selected = getProvider()
@@ -219,7 +267,10 @@ export function createAntigravityLlmBridge(
       const permissionMode = policy?.mode === 'danger-full-access' ? 'full-access' : policy?.mode === 'workspace-write' ? 'auto-accept-edits' : 'approval-required'
       const natives = await nativeModels(true)
       if (natives.length === 0) throw new Error('Antigravity model catalog is unavailable')
-      const nativeModel = nativeAntigravityModelId(options.model, options.reasoningEffort, natives.map(model => model.id), natives)
+      const collapsed = collapseNative(natives)
+      const selected = findCollapsed(collapsed, options.model)
+      if (selected === undefined) throw new Error('Unknown Antigravity model: ' + options.model)
+      const nativeModel = nativeAntigravityModelId(selected.id, options.reasoningEffort, natives.map(model => model.id), natives, selected.effortMap)
       const workspaceRoot = policy?.workspaceRoot
       if (getProvider() !== installed) throw new Error('Antigravity configuration changed before native execution')
       const openRequest = {
@@ -230,21 +281,11 @@ export function createAntigravityLlmBridge(
         ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
         signal,
       } as const
-      type Pending = { kind: 'thought' | 'text'; text: string } | { kind: 'usage'; usage: TokenUsage }
+      type Pending = { kind: 'thought' | 'text'; text: string }
       const pending: Pending[] = []
-      let latestUsage: TokenUsage | undefined
-      let usageBase: TokenUsage | undefined
-      const requestSamples = new Map<string, RequestThroughput>()
-      const withRequestMetrics = (usage: TokenUsage): TokenUsage => {
-        const matched = [...requestSamples.values()].reduce((sum, sample) => ({
-          outputTokens: sum.outputTokens + sample.outputTokens,
-          elapsedMs: sum.elapsedMs + sample.elapsedMs,
-          requestCount: sum.requestCount + sample.requestCount,
-        }), { outputTokens: 0, elapsedMs: 0, requestCount: 0 })
-        const measurable = matched.requestCount > 0 && Number.isSafeInteger(matched.outputTokens) && Number.isFinite(matched.elapsedMs)
-        return { ...usage, generationElapsedMs: null, ...(measurable ? { requestThroughput: matched } : {}) }
-      }
+      let followUp: string | undefined
       let wake: (() => void) | undefined
+      const usages: TokenUsage[] = []
       const push = (kind: 'thought' | 'text', text: string): void => {
         if (text.length === 0) return
         pending.push({ kind, text })
@@ -291,30 +332,19 @@ export function createAntigravityLlmBridge(
           else if (event.type === 'plan-update') {
             push('text', formatPlanUpdate(event))
           } else if (event.type === 'usage') {
-            const snapshots = decodeUsageSnapshots('usageSnapshots' in event ? event.usageSnapshots : undefined)
-            if (snapshots !== undefined) hostAsk?.appendToolEvents?.(options.sessionId, [{ type: ANTIGRAVITY_USAGE_SNAPSHOTS, data: snapshots }])
-            const telemetry = decodeRequestTelemetry('requestTelemetry' in event ? event.requestTelemetry : undefined)
-            if (telemetry !== undefined) {
-              // ponytail: cumulative bags cost O(n²) history bytes per prompt; store request deltas if long loops make this material.
-              hostAsk?.appendToolEvents?.(options.sessionId, [{ type: ANTIGRAVITY_REQUEST_TELEMETRY, data: telemetry }])
-              const sample = requestThroughput(telemetry)
-              const identity = telemetry.sessionKey + '\n' + telemetry.promptId
-              if (sample === undefined) requestSamples.delete(identity)
-              else requestSamples.set(identity, sample)
-            }
-            // Native updates are cumulative within a prompt; only its last valid snapshot is counted.
-            const observed = reportedUsage(event) ?? sdkUsage(snapshots)
-            if (observed !== undefined) latestUsage = observed
-            else if (snapshots !== undefined && latestUsage !== undefined) latestUsage = { ...latestUsage, usageComplete: false }
-            const usage = usageBase === undefined ? latestUsage : sumTurnUsage(usageBase, latestUsage)
-            if (usage !== undefined) {
-              pending.push({ kind: 'usage', usage: withRequestMetrics({ ...usage, usageComplete: false }) })
-              wake?.()
-            }
+            // Validated provider accounting feeds the token meter and context
+            // ring; partial or invalid samples stay out rather than guessing.
+            // Canonical keys first, telemetry spellings as fallback.
+            const sample = reportedUsage(event) ?? acpUsage(withTelemetryKeys(event))
+            if (sample !== undefined) usages.push(sample)
           }
         },
         requestPermission: request => decidePermission(request, permissionMode, hostAsk, signal, options.sessionId),
-        requestUserInput: request => decideUserInput(request, hostAsk, signal, options.sessionId),
+        requestUserInput: async request => {
+          const answer = await decideUserInput(request, hostAsk, signal, options.sessionId)
+          if (answer.custom !== undefined && answer.custom.trim() !== '') followUp = answer.custom.trim()
+          return answer
+        },
       })
       const prompt = acpPrompt(options.messages)
       async function* drain(running: Promise<{ status: string; text: string }>, start: { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }): AsyncGenerator<Chunk, { thought: string; text: string; thoughtOpen: boolean; textOpen: boolean }> {
@@ -326,10 +356,6 @@ export function createAntigravityLlmBridge(
           }
           const item = pending.shift()
           if (item === undefined) break
-          if (item.kind === 'usage') {
-            yield { type: 'usage', usage: item.usage }
-            continue
-          }
           if (item.kind === 'thought') {
             if (!thoughtOpen) {
               yield { type: 'block-start', index: 0, blockType: 'reasoning' }
@@ -360,9 +386,17 @@ export function createAntigravityLlmBridge(
         const result = await first
         let finalStatus = result.status
         let finalError = result.error
-        let finalUsage = result.status === 'completed' ? latestUsage : undefined
         let assembled = state.text.length > 0 ? state.text : result.text
-        if (result.status === 'completed' && hostAsk?.isPlanMode?.(options.sessionId) === true && hostAsk.ask !== undefined) {
+        if (followUp !== undefined && followUp.trim() !== '' && !signal.aborted) {
+          const extra = run(followUp)
+          followUp = undefined
+          state = yield* drain(extra, state)
+          const next = await extra
+          finalStatus = next.status
+          finalError = next.error
+          assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
+        }
+        if (finalStatus === 'completed' && hostAsk?.isPlanMode?.(options.sessionId) === true && hostAsk.ask !== undefined) {
           let approved = false
           try {
             approved = await reviewPlan(assembled, hostAsk, signal, options.sessionId)
@@ -371,14 +405,11 @@ export function createAntigravityLlmBridge(
             approved = false
           }
           if (approved) {
-            usageBase = finalUsage
-            latestUsage = undefined
             const second = run('The user approved the plan. Carry it out now.')
             state = yield* drain(second, state)
             const next = await second
             finalStatus = next.status
             finalError = next.error
-            finalUsage = next.status === 'completed' ? sumTurnUsage(finalUsage, latestUsage) : undefined
             assembled = state.text.length > 0 ? state.text : assembled + (next.text.length > 0 ? String.fromCharCode(10) + next.text : '')
           }
         }
@@ -387,9 +418,7 @@ export function createAntigravityLlmBridge(
           if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
           yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
         }
-        if (finalUsage !== undefined) {
-          yield { type: 'usage', usage: withRequestMetrics(finalUsage) }
-        }
+        for (const sample of usages.splice(0)) yield { type: 'usage', usage: sample }
         yield { type: 'finish', reason: finalStatus === 'cancelled'
           ? { kind: 'aborted', failure: { code: 'ABORTED', message: 'Native turn cancelled' } }
           : finalStatus === 'failed'

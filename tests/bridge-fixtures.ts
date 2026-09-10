@@ -101,6 +101,7 @@ export function bridgeWithStubProvider(
   getCachedModels: (() => readonly { id: string; name: string }[]) | undefined = undefined,
   setCachedModels: ((models: readonly { id: string; name: string }[]) => void) | undefined = undefined,
   host: BridgeHost | undefined = undefined,
+  getCachedFacts: (() => ReadonlyMap<string, import('../src/model-metadata.js').ModelFacts>) | undefined = undefined,
 ): ReturnType<typeof createAntigravityLlmBridge> {
   const provider = {
     info: { id: providerId('antigravity'), name: 'Antigravity' },
@@ -133,7 +134,7 @@ export function bridgeWithStubProvider(
   const factory = createAntigravityLlmBridge as unknown as (
     ...args: readonly unknown[]
   ) => ReturnType<typeof createAntigravityLlmBridge>
-  return factory({ registry, getProvider: () => provider }, getCachedModels, setCachedModels, host)
+  return factory({ registry, getProvider: () => provider }, getCachedModels, setCachedModels, host, getCachedFacts)
 }
 
 /** One native model entry advertised through session/new and session/resume. */

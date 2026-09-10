@@ -44,11 +44,11 @@ function renderBody(row: AcpSettingsRow, snapshot: AcpSettingsSnapshot, extra?: 
     polling: false,
     saving: false,
     dirty: false,
-    onToggleEnabled: noop,
     onAction: noop,
     onRefresh: noop,
+    onRefreshModels: () => Promise.resolve([]),
     onRefreshQuota: noop,
-    onModelChange: noop,
+    onCatalogChange: noop,
     onPersist: noop,
     onDiscard: noop,
     ...extra,
@@ -86,6 +86,7 @@ describe('antigravity settings card states', () => {
     expect(markup).not.toContain(en.signIn)
     expect(markup).not.toContain(en.refreshQuota)
     expect(markup).not.toContain(en.refreshModels)
+    expect(markup).not.toContain(en.fetchModels)
     expect(markup).not.toContain(baseRow.executablePath)
     expect(markup).not.toContain(baseRow.harnessPath)
     expect(markup).not.toContain(baseRow.stateDirectory)
@@ -107,28 +108,66 @@ describe('antigravity settings card states', () => {
     const row = { ...baseRow, installed: true, authorizationUrl: 'https://accounts.example/login' }
     const markup = renderBody(row, snapshotFor(row))
     expect(markup).toContain(en.signIn)
-    expect(markup.indexOf(en.signIn)).toBeLessThan(markup.indexOf(en.rescan))
+    expect(markup).not.toContain(en.rescan)
     expect(markup).toContain(en.openLogin)
+    expect(markup).toContain('https://accounts.example/login')
+    expect(markup).toContain(en.accessRemote)
+    expect(markup).toContain(en.pasteCallback)
+    expect(markup).toContain(en.submitCallback)
     expect(markup).not.toContain(en.install)
     expect(markup).not.toContain(en.refreshQuota)
     expect(markup).not.toContain(en.refreshModels)
+    expect(markup).not.toContain(en.fetchModels)
     expect(markup).not.toContain(baseRow.executablePath)
     expect(markup).not.toContain(baseRow.stateDirectory)
     expect(markup).not.toContain('localharness_external')
   })
 
+  it('keeps callback paste on localhost, lan, and app', () => {
+    const row = { ...baseRow, installed: true, authorizationUrl: 'https://accounts.example/login' }
+    const local = renderBody(row, snapshotFor(row), { accessKind: 'local' })
+    expect(local).toContain(en.accessLocal)
+    expect(local).toContain(en.pasteCallback)
+    expect(local).toContain(en.submitCallback)
+    const lan = renderBody(row, snapshotFor(row), { accessKind: 'lan' })
+    expect(lan).toContain(en.accessLan)
+    expect(lan).toContain(en.pasteCallback)
+    const app = renderBody(row, snapshotFor(row), { accessKind: 'app' })
+    expect(app).toContain(en.accessApp)
+    expect(app).toContain(en.submitCallback)
+  })
+
   it('orders account, quota, and model when connected and keeps the save footer last', () => {
     const row = { ...baseRow, installed: true, authenticated: true, model: 'models/a', models: [{ id: 'models/a', name: 'Model A' }, { id: 'models/b', name: 'Model B' }] }
     const markup = renderBody(row, snapshotFor(row), { quota, dirty: true })
-    expect(markup.indexOf(en.signOut)).toBeLessThan(markup.indexOf(en.refreshQuota))
-    expect(markup.indexOf(en.refreshQuota)).toBeLessThan(markup.indexOf(en.refreshModels))
-    expect(markup.indexOf(en.refreshModels)).toBeLessThan(markup.indexOf(en.save))
-    expect(markup).toContain('Model A')
+    expect(markup.indexOf(en.manageAccount)).toBeLessThan(markup.indexOf(en.refreshQuota))
+    expect(markup.indexOf(en.refreshQuota)).toBeLessThan(markup.indexOf(en.fetchModels))
+    expect(markup.indexOf(en.fetchModels)).toBeLessThan(markup.indexOf(en.save))
+    expect(markup).toContain(en.model)
     expect(markup).toContain('Gemini')
+    expect(markup).toContain(en.manageAccount)
     expect(markup).toContain(en.cancel)
     expect(markup).not.toContain(baseRow.executablePath)
     expect(markup).not.toContain(baseRow.harnessPath)
     expect(markup).not.toContain(baseRow.stateDirectory)
     expect(markup).not.toContain('Advanced / runtime')
+  })
+
+  it('shows the reference catalog chrome without provider-specific rows', () => {
+    const row = {
+      ...baseRow,
+      installed: true,
+      authenticated: true,
+      models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }] } }],
+    }
+    const markup = renderBody(row, snapshotFor(row))
+    expect(markup).toContain(en.model)
+    expect(markup).toContain(en.fetchModels)
+    expect(markup).toContain(en.inherited)
+    expect(markup).toContain(en.sortModels)
+    expect(markup).not.toContain(en.inputLimit)
+    expect(markup).not.toContain(en.declaredDefault)
+    expect(markup).not.toContain(en.enableProvider)
+    expect(markup).not.toContain(en.followNative)
   })
 })

@@ -156,6 +156,28 @@ export function parseAntigravityAuthPrelude(stdout: string): AntigravityAuthoriz
   return parseAntigravityAuthorizationUrl(rawUrl)
 }
 
+const CALLBACK_QUERY_KEYS = new Set(['code', 'state', 'error', 'error_description', 'scope', 'authuser', 'prompt', 'hd'])
+
+/** Rebuild a native loopback callback URL from a pasted remote-browser address bar. */
+export function parseAntigravityCallbackUrl(pasted: string, pending: AntigravityAuthorizationRequest): string {
+  const trimmed = pasted.trim()
+  if (trimmed === '' || /\s/.test(trimmed) || new TextEncoder().encode(trimmed).byteLength > MAX_AUTHORIZATION_URL_BYTES) throw new Error('Antigravity callback URL is invalid')
+  let url: URL
+  try { url = new URL(trimmed) } catch { throw new Error('Antigravity callback URL is invalid') }
+  const redirect = new URL(pending.redirectUri)
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.port !== redirect.port || url.pathname !== '/' || url.username !== '' || url.password !== '' || url.hash !== '') throw new Error('Antigravity callback URL is invalid')
+  if (url.searchParams.get('state') !== pending.state || url.searchParams.getAll('state').length !== 1) throw new Error('Antigravity callback URL is invalid')
+  if ([...url.searchParams.keys()].some(key => !CALLBACK_QUERY_KEYS.has(key))) throw new Error('Antigravity callback URL is invalid')
+  const code = url.searchParams.get('code')
+  const error = url.searchParams.get('error')
+  if ((code === null) === (error === null)) throw new Error('Antigravity callback URL is invalid')
+  if (code !== null && (code.length === 0 || /\s/.test(code) || url.searchParams.getAll('code').length !== 1)) throw new Error('Antigravity callback URL is invalid')
+  if (error !== null && (error.length === 0 || url.searchParams.getAll('error').length !== 1)) throw new Error('Antigravity callback URL is invalid')
+  const callback = new URL(pending.redirectUri)
+  for (const [key, value] of url.searchParams) callback.searchParams.append(key, value)
+  return callback.href
+}
+
 /** Remove bearer tokens, OAuth query values and likely API keys from diagnostics. */
 export function redactAntigravityText(text: string): string {
   return text

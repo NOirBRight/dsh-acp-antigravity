@@ -19,6 +19,7 @@ import type {
   AntigravityQuotaSnapshot,
   AntigravityQuotaStatus,
 } from './client-contract.js'
+import { parseCcpaModelList, type CcpaModelList } from './ccpa-models.js'
 import { isRecord } from './decode.js'
 import { ANTIGRAVITY_RELEASE_VERSION } from './release.js'
 import type { AntigravityProviderConfig } from './types.js'
@@ -128,6 +129,22 @@ export class AntigravityQuotaReader {
     this.generation += 1
     this.accessToken = undefined
     this.cachedQuota = undefined
+  }
+
+  /** Read-only CCPA model list using the same account session as quota. */
+  async listModels(signal?: AbortSignal): Promise<CcpaModelList> {
+    const loaded = await this.loadCredentials()
+    this.syncKey(loaded.key)
+    if (loaded.failure !== undefined || loaded.credentials === undefined || loaded.key === null) throw new Error(loaded.failure?.message ?? antigravitySignInRequiredMessage())
+    const accessToken = await this.accessTokenFor(loaded.credentials, loaded.key, signal)
+    if (accessToken === '') throw new Error(antigravitySignInRequiredMessage())
+    const discovery = await this.postForm(ANTIGRAVITY_CCPA_PROD_ENDPOINT + '/v1internal:loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY' } }, accessToken, signal)
+    const entitlement = checkEntitlement(discovery.status, discovery.json)
+    if (entitlement.failure !== undefined || entitlement.project === undefined || entitlement.endpoint === undefined) throw new Error(entitlement.failure?.message ?? 'Antigravity account is not entitled to models.')
+    const listed = await this.postForm(entitlement.endpoint + '/v1internal:fetchAvailableModels', { project: entitlement.project }, accessToken, signal)
+    if (listed.status === 401) throw new Error(antigravitySignInRequiredMessage())
+    if (listed.status < 200 || listed.status >= 300) throw new Error('Antigravity model list failed (HTTP ' + String(listed.status) + ').')
+    return parseCcpaModelList(listed.json)
   }
 
   /** Return the sanitized quota snapshot, sharing one refresh between concurrent callers.
@@ -415,7 +432,11 @@ function quotaGroups(payload: unknown): AntigravityQuotaGroup[] | undefined {
 
 function quotaBucket(item: unknown): AntigravityQuotaBucket | undefined {
   if (!isRecord(item)) return undefined
-  const remainingFraction = typeof item.remainingFraction === 'number' && Number.isFinite(item.remainingFraction) ? item.remainingFraction : undefined
+  // Shared meters multiply fractions by 100 in floating point, so any decimal
+  // fraction can sprout a tail (0.974 * 100 renders 97.40000000000001). Keep
+  // whole percents only; 99 caps a non-full bucket so it never reads as full.
+  const rawFraction = typeof item.remainingFraction === 'number' && Number.isFinite(item.remainingFraction) ? item.remainingFraction : undefined
+  const remainingFraction = rawFraction === undefined ? undefined : rawFraction >= 1 ? 1 : Math.min(0.99, Math.round(rawFraction * 100) / 100)
   const remainingAmount = typeof item.remainingAmount === 'string' || typeof item.remainingAmount === 'number' ? String(item.remainingAmount) : undefined
   const disabled = typeof item.disabled === 'boolean' ? item.disabled : undefined
   const bucketId = optionalText(item, 'bucketId')

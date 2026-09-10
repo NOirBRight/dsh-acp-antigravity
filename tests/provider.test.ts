@@ -20,6 +20,7 @@ import {
   mapPermissionMode,
   parseAntigravityAuthPrelude,
   parseAntigravityAuthorizationUrl,
+  parseAntigravityCallbackUrl,
   parseAntigravityModels,
   normalizeAntigravitySessionUpdate,
   prepareAntigravityProfile,
@@ -207,16 +208,16 @@ describe('Antigravity mapping and safety', () => {
       _meta: { 'agy.supportsFreeform': true },
       options: [{ optionId: 'native-a', kind: 'allow_once', name: 'First' }],
     }, 8)
-    expect(response).toEqual({ outcome: { outcome: 'cancelled' }, _meta: { 'agy.freeformResponse': text } })
+    expect(response).toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
-  it.each([undefined, false, 'true'])('requires explicit native freeform support (%s)', async capability => {
+  it.each([undefined, false, 'true'])('cancels custom answers without native freeform metadata (%s)', async capability => {
     const handler = createAntigravityInteractionHandler({ ...host(), requestUserInput: async () => ({ answers: ['custom'], custom: 'custom' }) })
     await expect(handler('session/request_permission', {
       toolCall: { toolCallId: 'interaction_custom', title: 'Pick one' },
       options: [{ optionId: '1', kind: 'allow_once', name: 'First' }],
       _meta: { 'agy.supportsFreeform': capability },
-    }, 9)).rejects.toThrow('does not support custom question answers')
+    }, 9)).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
   it('does not treat freeform support as permission to select an unoffered action', async () => {
@@ -252,6 +253,15 @@ describe('Antigravity mapping and safety', () => {
     expect(parseAntigravityAuthPrelude('notice\nOpen the following link to authenticate the ACP server: ' + url + '\n')).toMatchObject({ state: 'state123' })
     expect(() => parseAntigravityAuthorizationUrl(url.replace('127.0.0.1', 'evil.example'))).toThrow(/invalid/)
     expect(() => parseAntigravityAuthorizationUrl(url + '&code=private')).toThrow(/invalid/)
+    const pending = parseAntigravityAuthorizationUrl(url)
+    const callback = 'http://127.0.0.1:8765/?state=state123&code=oauth-code'
+    expect(parseAntigravityCallbackUrl(callback, pending)).toBe('http://127.0.0.1:8765/?state=state123&code=oauth-code')
+    expect(parseAntigravityCallbackUrl('http://127.0.0.1:8765/?state=state123&error=access_denied', pending)).toContain('error=access_denied')
+    expect(() => parseAntigravityCallbackUrl(callback.replace('127.0.0.1', 'evil.example'), pending)).toThrow(/invalid/)
+    expect(() => parseAntigravityCallbackUrl('http://127.0.0.1:9999/?state=state123&code=oauth-code', pending)).toThrow(/invalid/)
+    expect(() => parseAntigravityCallbackUrl('http://127.0.0.1:8765/?state=other&code=oauth-code', pending)).toThrow(/invalid/)
+    expect(() => parseAntigravityCallbackUrl('https://127.0.0.1:8765/?state=state123&code=oauth-code', pending)).toThrow(/invalid/)
+    expect(() => parseAntigravityCallbackUrl('http://127.0.0.1:8765/?state=state123', pending)).toThrow(/invalid/)
     const diagnostic = redactAntigravityText('Bearer secret-token https://x.test/?code=private&state=state123 AIza' + 'A'.repeat(24))
     expect(diagnostic).not.toContain('secret-token')
     expect(diagnostic).not.toContain('private')
@@ -304,7 +314,7 @@ describe('Antigravity mapping and safety', () => {
 })
 
 describe('Antigravity provider lifecycle', () => {
-  it.each([false, true])('retains final native usage and request evidence through the bounded host (telemetry=%s)', async withTelemetry => {
+  it.each([false, true])('forwards validated native usage into the LLM stream (telemetry=%s)', async withTelemetry => {
     const telemetry = { version: 1, provenance: 'ccpa-proxy', scope: 'session', promptId: 'prompt-1', sessionKey: 'native-1', requests: [{ requestId: 'request-1', model: 'gemini-pro', status: 'completed', durationMs: 1000, usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, thoughtsTokenCount: 30, totalTokenCount: 150, cachedContentTokenCount: 60 } }] }
     const records: unknown[] = []
     const provider = new AntigravityProvider(config(), {
@@ -317,9 +327,9 @@ describe('Antigravity provider lifecycle', () => {
     try {
       const chunks = []
       for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini-pro', sessionId: 'usage-bridge', messages: [{ role: 'user', source: { kind: 'user' }, content: 'hello' }] })) chunks.push(chunk)
-      const usage = { inputTokens: 40, outputTokens: 50, reasoningTokens: 30, cacheReadTokens: 60, totalTokens: 150, generationElapsedMs: null, ...(withTelemetry ? { requestThroughput: { outputTokens: 50, elapsedMs: 1000, requestCount: 1 } } : {}) }
-      expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([{ type: 'usage', usage: { ...usage, usageComplete: false } }, { type: 'usage', usage }])
-      if (withTelemetry) expect(records).toContainEqual({ type: 'antigravity/request-telemetry', data: telemetry })
+      expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([
+        { type: 'usage', usage: { inputTokens: 40, outputTokens: 50, totalTokens: 150, reasoningTokens: 30, cacheReadTokens: 60 } },
+      ])
     } finally {
       await adapter.dispose()
       await unregister()
