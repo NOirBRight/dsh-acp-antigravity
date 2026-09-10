@@ -234,7 +234,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       stateDirectory: live.stateDirectory,
       ...(live.model === undefined ? {} : { model: live.model }),
       ...(live.modelDiscoveryTimeoutMs === undefined ? {} : { modelDiscoveryTimeoutMs: live.modelDiscoveryTimeoutMs }),
-      models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts), live.catalogOrder, live.catalogOverrides),
+      models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts, declaredDefaultModelId), live.catalogOrder, live.catalogOverrides),
       ...(declaredDefaultModelId === undefined ? {} : { declaredDefaultModelId }),
       installed: !('status' in await validateAntigravityInstallation(toProviderConfig(live))),
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
@@ -309,7 +309,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         },
         resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
         requestApproval: input => requestNativeApproval(ctx, input),
-      }, () => modelFacts)
+      }, () => modelFacts, () => ({
+        ...(declaredDefaultModelId === undefined ? {} : { declaredDefaultModelId }),
+        ...(live.catalogOverrides === undefined ? {} : { overrides: live.catalogOverrides }),
+      }))
       bridge = adapter
       scope.effect(() => {
         const unregister = scope.llm.registerAdapter(['antigravity'], adapter)
@@ -334,7 +337,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
       if (models.length === 0) return { groups: [] }
-      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts), live.catalogOrder, live.catalogOverrides) }] }
+      return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts, declaredDefaultModelId), live.catalogOrder, live.catalogOverrides) }] }
     },
     applyConfig: async next => {
       const remount = next.executablePath !== live.executablePath || next.harnessPath !== live.harnessPath || next.stateDirectory !== live.stateDirectory || next.instanceId !== live.instanceId
@@ -348,7 +351,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       const editor = editors.require(installed.provider.info.id, providerInstanceId(live.instanceId))
       if (action === 'refresh-models') {
         await refreshCatalog(signal)
-        return collapseAntigravityModels(models, modelFacts)
+        return collapseAntigravityModels(models, modelFacts, declaredDefaultModelId)
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {
         return { path: deriveAntigravityHarnessPath(value) }

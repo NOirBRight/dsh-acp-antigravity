@@ -15,7 +15,7 @@ import {
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
 import type { StreamChunk, ResolvedRetryPolicy, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CollapsedAntigravityModel } from './catalog.js'
+import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CatalogOverlay, type CollapsedAntigravityModel } from './catalog.js'
 import type { ModelFacts } from './model-metadata.js'
 import { isRecord } from './decode.js'
 import { acpUsage, hostUsage, reportedUsage, withTelemetryKeys } from './usage.js'
@@ -126,8 +126,31 @@ export interface AntigravityResolvedModel {
   readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string }
 }
 
-function collapseCatalog(native: readonly { id: string; name: string }[], facts?: ReadonlyMap<string, ModelFacts>): readonly CollapsedAntigravityModel[] {
-  return collapseAntigravityModels(native, facts ?? new Map())
+/** Discovery inputs the Settings card and the Host directory must agree on. */
+export interface AntigravityCatalogContext {
+  /** Account-declared default model; its effort is that model's default level. */
+  readonly declaredDefaultModelId?: string
+  /** Saved per-id field overrides; membership stays the discovered catalog. */
+  readonly overrides?: Readonly<Record<string, CatalogOverlay>>
+}
+
+function collapseCatalog(
+  native: readonly { id: string; name: string }[],
+  facts?: ReadonlyMap<string, ModelFacts>,
+  context?: AntigravityCatalogContext,
+): readonly CollapsedAntigravityModel[] {
+  const collapsed = collapseAntigravityModels(native, facts ?? new Map(), context?.declaredDefaultModelId)
+  if (context?.overrides === undefined) return collapsed
+  // Project only the saved default level. Discovery still owns the efforts the
+  // Host routes on, and membership stays whole so a deselected row still resolves.
+  return collapsed.map(model => {
+    const reasoning = context.overrides?.[model.id]?.reasoning
+    if (reasoning === undefined) return model
+    const efforts = model.reasoning?.efforts ?? []
+    return reasoning.defaultEffort === undefined
+      ? (model.reasoning === undefined ? model : { ...model, reasoning: { efforts } })
+      : { ...model, reasoning: { efforts, defaultEffort: reasoning.defaultEffort } }
+  })
 }
 
 function findCollapsed(collapsed: readonly CollapsedAntigravityModel[], model: string): CollapsedAntigravityModel | undefined {
@@ -139,6 +162,9 @@ function findCollapsed(collapsed: readonly CollapsedAntigravityModel[], model: s
 function toResolvedModel(provider: string, requested: string, found: CollapsedAntigravityModel): AntigravityResolvedModel {
   const id = found.nativeIds.includes(requested) || found.id === requested ? requested : found.id
   const efforts = found.reasoning?.efforts ?? []
+  // The Host rejects a default outside efforts and fails the whole model entry.
+  const declaredDefault = found.reasoning?.defaultEffort
+  const defaultEffort = declaredDefault !== undefined && efforts.some(effort => effort.id === declaredDefault) ? declaredDefault : undefined
   return {
     provider,
     id,
@@ -149,7 +175,7 @@ function toResolvedModel(provider: string, requested: string, found: CollapsedAn
     ...(efforts.length === 0 ? {} : {
       reasoning: {
         efforts,
-        ...(found.reasoning?.defaultEffort === undefined ? {} : { defaultEffort: found.reasoning.defaultEffort }),
+        ...(defaultEffort === undefined ? {} : { defaultEffort }),
       },
     }),
   }
@@ -173,6 +199,7 @@ export function createAntigravityLlmBridge(
   setCachedModels?: (models: readonly { id: string; name: string }[]) => void,
   hostAsk?: BridgeHost,
   getCachedFacts?: () => ReadonlyMap<string, ModelFacts>,
+  getCatalogContext?: () => AntigravityCatalogContext | undefined,
 ): {
   providerInfo(provider: string): { id: string; name: string }
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy
@@ -199,7 +226,7 @@ export function createAntigravityLlmBridge(
   })
   let listing: Promise<readonly { id: string; name: string }[]> | undefined
   function collapseNative(native: readonly { id: string; name: string }[]): readonly CollapsedAntigravityModel[] {
-    return collapseCatalog(native, getCachedFacts?.())
+    return collapseCatalog(native, getCachedFacts?.(), getCatalogContext?.())
   }
   /** Cached native catalog. `wait` is for resolve/stream; picker `listModels` must not wait. */
   function nativeModels(wait: boolean): Promise<readonly { id: string; name: string }[]> {

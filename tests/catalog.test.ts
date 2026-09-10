@@ -36,6 +36,27 @@ describe('Antigravity catalog collapse', () => {
     expect(collapsed[0]?.effortMap.high).toBe('gemini-pro-agent')
   })
 
+  it('takes the account default variant as the default effort, and only when it is routable', () => {
+    const native = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
+      { id: 'gemini-3.7-flash-high', name: 'Gemini 3.7 Flash (High)' },
+    ]
+    const declared = collapseAntigravityModels(native, new Map(), 'gemini-3.8-flash-high')
+    expect(declared.find(model => model.id === 'gemini-3.8-flash')?.reasoning?.defaultEffort).toBe('high')
+    expect(declared.find(model => model.id === 'gemini-3.8-flash')?.sources?.defaultEffort).toBe('upstream')
+    expect(declared.find(model => model.id === 'gemini-3.7-flash')?.reasoning?.defaultEffort).toBeUndefined()
+    expect(collapseAntigravityModels(native, new Map(), 'claude-sonnet-4-6').every(model => model.reasoning?.defaultEffort === undefined)).toBe(true)
+    expect(collapseAntigravityModels(native, new Map())[0]?.reasoning?.defaultEffort).toBeUndefined()
+    const unroutable = collapseAntigravityModels(
+      [{ id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' }],
+      new Map(),
+      'gemini-3.8-flash-high',
+    )
+    expect(unroutable[0]?.reasoning?.defaultEffort).toBeUndefined()
+  })
+
   it('keeps upstream output of 65535 instead of a models.dev 65536', () => {
     const facts = new Map([
       ['gemini-3.1-pro-low', mergeModelFacts({ maxOutputTokens: 65535 }, { maxOutputTokens: 65536, contextWindow: 1048576 })],

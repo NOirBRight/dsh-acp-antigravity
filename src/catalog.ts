@@ -70,6 +70,7 @@ export interface CollapsedAntigravityModel {
 export function collapseAntigravityModels(
   models: readonly { id: string; name: string }[],
   factsByNative: ReadonlyMap<string, ModelFacts> = new Map(),
+  declaredDefaultModelId?: string,
 ): readonly CollapsedAntigravityModel[] {
   const groups = new Map<string, CollapseGroup>()
   const order: string[] = []
@@ -131,12 +132,21 @@ export function collapseAntigravityModels(
     const maxOutputTokens = agree(facts.map(item => item.maxOutputTokens))
     const contextWindow = agree(facts.map(item => item.contextWindow))
     const discoveredDefault = agree(facts.map(item => item.defaultEffort))
-    const defaultEffort = discoveredDefault !== undefined && efforts.some(item => item.id === discoveredDefault) ? discoveredDefault : undefined
+    // The account's declared default model names one variant of its own model, so
+    // its effort is the level Antigravity itself routes to when none is chosen.
+    const declaredDefault = declaredDefaultModelId !== undefined && group.native.includes(declaredDefaultModelId)
+      ? peelEffort(declaredDefaultModelId).effort
+      : undefined
+    // Only a routable effort is a default: an id outside efforts cannot be sent.
+    const defaultEffort = [discoveredDefault, declaredDefault]
+      .find(candidate => candidate !== undefined && efforts.some(item => item.id === candidate))
     const sources: Partial<Record<FactKey, FieldSource>> = {}
     for (const key of ['vision', 'thinking', 'inputTokenLimit', 'maxOutputTokens', 'contextWindow', 'defaultEffort'] as const) {
       const source = agree(facts.map(item => item.sources[key]))
       if (source !== undefined) sources[key] = source
     }
+    // The derived level is upstream data too, so the card shows it as discovered.
+    if (defaultEffort !== undefined && defaultEffort === declaredDefault) sources.defaultEffort = 'upstream'
     return {
       id,
       name: group.name,

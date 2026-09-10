@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { providerId } from '@deepseek-ai/dsh-acp-provider'
 import { mergeModelFacts } from '../src/model-metadata.js'
-import { bridgeWithStubProvider, VALID_MODES, validListModel, validRef } from './bridge-fixtures.js'
+import type { AntigravityCatalogContext } from '../src/llm-bridge.js'
+import { bridgeWithStubProvider, callsTo, collectStream, finishOf, makeAntigravityHarness, paramField, VALID_MODES, validListModel, validRef } from './bridge-fixtures.js'
 
 function provider(listed: { id: string; name: string }[]) {
   return {
@@ -72,5 +73,79 @@ describe('Antigravity LLM catalog Host shape', () => {
     const listed = await adapter.listModels('antigravity')
     expect(listed).toEqual([{ provider: 'antigravity', id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }])
     await adapter.dispose()
+  })
+
+  it('carries the account default variant and the saved override into the Host directory', async () => {
+    let cached = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+    ]
+    const adapter = bridgeWithStubProvider(
+      provider(cached),
+      () => cached,
+      next => { cached = [...next] },
+      undefined,
+      undefined,
+      () => ({ declaredDefaultModelId: 'gemini-3.8-flash-medium' }),
+    )
+    const discovered = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
+    expect(discovered.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium'])
+    expect(discovered.reasoning?.defaultEffort).toBe('medium')
+    await adapter.dispose()
+  })
+
+  it('projects the saved default effort over the discovered one and drops an unroutable default', async () => {
+    let cached = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
+    ]
+    const savedEfforts = [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }]
+    let context: AntigravityCatalogContext = { overrides: { 'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: savedEfforts, defaultEffort: 'high' } } } }
+    const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => context)
+    const chosen = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
+    expect(chosen.reasoning?.defaultEffort).toBe('high')
+    // A stored level the current catalog can no longer route must not reach the Host.
+    context = { overrides: { 'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: savedEfforts, defaultEffort: 'medium' } } } }
+    const unroutable = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
+    expect(unroutable.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'low'])
+    expect(unroutable.reasoning).not.toHaveProperty('defaultEffort')
+    await adapter.dispose()
+  })
+
+  it('keeps a deselected row resolvable because saved order is membership, not routing', async () => {
+    let cached = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.7-flash-high', name: 'Gemini 3.7 Flash (High)' },
+    ]
+    const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => ({
+      overrides: { 'gemini-3.7-flash': { name: 'Gemini 3.7 Flash', reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } } },
+    }))
+    const listed = await adapter.listModels('antigravity')
+    expect(listed.map(model => model.id)).toEqual(['gemini-3.8-flash', 'gemini-3.7-flash'])
+    await expect(adapter.resolveModel('antigravity', 'gemini-3.8-flash')).resolves.toMatchObject({ id: 'gemini-3.8-flash' })
+    await adapter.dispose()
+  })
+
+  it('sends the resolved effort as the native variant the ACP prompt uses', async () => {
+    const harness = makeAntigravityHarness({
+      models: [
+        { value: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+        { value: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+      ],
+    })
+    try {
+      const chunks = await collectStream(harness.bridge.stream({
+        provider: 'antigravity',
+        model: 'gemini-3.8-flash',
+        reasoningEffort: 'medium',
+        sessionId: 'e2e-effort',
+        messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }],
+      }))
+      expect(finishOf(chunks)?.kind).toBe('stop')
+      expect(callsTo(harness.world, 'session/set_config_option', params => paramField(params, 'value') === 'gemini-3.8-flash-medium').length).toBeGreaterThan(0)
+      expect(callsTo(harness.world, 'session/set_config_option', params => paramField(params, 'value') === 'gemini-3.8-flash-high')).toHaveLength(0)
+    } finally {
+      await harness.dispose()
+    }
   })
 })
