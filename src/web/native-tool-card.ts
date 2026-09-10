@@ -1,13 +1,12 @@
 /** Adapt folded native sidecar rows to canonical DSH tool-card props.
  *
  * Pure browser-safe mapping from the activity/read sidecar to presentation-only
- * GenericToolCard input. The produced block is typed presentation, never a
- * durable executable DSH tool event: no call is dispatched, no file is opened,
- * and no trajectory target exists (the node omits openFile/inspect, so paths
- * render as plain text and no Inspect pill appears).
+ * AntigravityReadonlyCard input. The produced block is typed presentation,
+ * never a durable executable DSH tool event: no call is dispatched, no file
+ * is opened, and no trajectory target exists (the card exposes no
+ * openFile/inspect surface, so paths render as plain text).
  */
-import type { GenericToolCardProps } from '@deepseek-ai/dsh-client-ui-tool/client'
-type ToolCallBlock = GenericToolCardProps['block']
+import type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { AntigravityToolState } from '../tool-events.js'
 
 /** Known native tool name (after separator folding) to canonical wire name. */

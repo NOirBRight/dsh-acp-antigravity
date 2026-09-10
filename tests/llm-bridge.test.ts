@@ -183,6 +183,31 @@ describe('Antigravity LLM bridge', () => {
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
   })
 
+  it('strips plugin-owned completeness from host usage chunks', async () => {
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(),
+        supportedModes: [...VALID_MODES],
+        runTurn: async (_request: unknown, host: { publish: (event: Record<string, unknown>) => Promise<void> }) => {
+          await host.publish({ type: 'usage', inputTokens: 11, outputTokens: 7, totalTokens: 18, usageComplete: false })
+          await host.publish({ type: 'assistant-delta', text: 'done' })
+          return { status: 'completed', text: 'done' }
+        },
+        dispose: async () => undefined,
+      }),
+    } as never)
+    const chunks: { type: string; usage?: Record<string, unknown> }[] = []
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', source: { kind: 'user' }, content: 'go' }], sessionId: 's-anon-go' })) {
+      chunks.push(chunk as { type: string; usage?: Record<string, unknown> })
+    }
+    const usage = chunks.filter(chunk => chunk.type === 'usage')
+    expect(usage).toHaveLength(1)
+    expect(usage[0]).toEqual({ type: 'usage', usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } })
+  })
+
   it('emits no usage without a provider-reported source', async () => {
     const adapter = bridgeWithStubProvider({
       info: { id: providerId('antigravity'), name: 'Antigravity' },

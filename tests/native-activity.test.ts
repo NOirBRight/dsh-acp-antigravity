@@ -15,26 +15,9 @@ import {
   type AntigravityToolStatus,
 } from '../src/tool-events.js'
 import { foldActivityRecords, loadActivityHistory, type AntigravityToolRowData } from '../src/web/native-activity.js'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { AntigravityToolNode } from '../src/web/AntigravityToolNode.js'
-import { NativeActivityNode } from '../src/web/NativeActivityNode.js'
 import { groupNativeActivity } from '../src/web/native-tree.js'
-import { en } from '../src/web/locales.js'
-
-const cardProps = vi.hoisted(() => [] as Record<string, unknown>[])
-
-// The shared card resolves only once the host adds the ui-tool client module;
-// until then this virtual stand-in records the exact props the node passes.
-// Three-argument virtual mock: resolves at runtime here, but this vitest's
-// types only allow two mock arguments. Delete this whole mock once the host
-// adds the ui-tool client dependency and these tests go real.
-vi.mock('@deepseek-ai/dsh-client-ui-tool/client', () => ({
-  GenericToolCard: (props: Record<string, unknown>) => {
-    cardProps.push(props)
-    return 'mock-card'
-  },
-  // @ts-expect-error: three-argument virtual mock until the stand-in is deleted.
-}), { virtual: true })
+import { en, type AcpSettingsKey } from '../src/web/locales.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   DisclosureRow: (props: { title?: string, collapsedContent?: unknown, children?: unknown }) =>
@@ -83,17 +66,12 @@ function ready(seq: number, time: string): AntigravityActivityRecord {
   return { seq, time, type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }
 }
 
-function conversationT(key: string): string {
-  return key
+function pluginT(key: AcpSettingsKey): string {
+  return en[key]
 }
 
-function lastCard(): Record<string, unknown> {
-  return cardProps[cardProps.length - 1] as Record<string, unknown>
-}
-
-function node(row: AntigravityToolRowData, translate: TranslateNS<'conversation'> = conversationT as TranslateNS<'conversation'>) {
-  cardProps.length = 0
-  return createElement(AntigravityToolNode, { row, t: translate })
+function node(row: AntigravityToolRowData) {
+  return createElement(AntigravityToolNode, { row, t: pluginT })
 }
 
 describe('Antigravity native activity fold', () => {
@@ -237,33 +215,35 @@ describe('Antigravity activity loader', () => {
 })
 
 describe('Antigravity tool row renderer', () => {
-  it('passes a normalized bash block with canonical args to the shared card', () => {
+  it('renders a settled bash row with canonical args and result as plain text', () => {
     const rows = foldActivityRecords([
       start(1, T0, 't', 'Running run command'),
       update(2, T1, 't', 'completed', { output: 'a.ts' }),
     ])
     const row = { ...rows[0]!, state: { ...rows[0]!.state, input: '{"CommandLine":"ls -la","description":"List"}' } }
     const markup = renderToStaticMarkup(node(row))
-    expect(markup).toContain('mock-card')
-    expect(lastCard()).toMatchObject({
-      callId: 't',
-      toolName: 'bash',
-      block: {
-        kind: 'tool-result',
-        call: { name: 'bash', argsRaw: '{"command":"ls -la","description":"List"}' },
-        content: [{ type: 'text', text: 'a.ts' }],
-        isError: false,
-      },
-    })
+    expect(markup).toContain('data-state="done"')
+    expect(markup).toContain(en.statusCompleted)
+    expect(markup).toContain('bash')
+    expect(markup).toContain('command: ls -la')
+    expect(markup).toContain('a.ts')
+    expect(markup).not.toContain('href=')
+    expect(markup).not.toContain('<a ')
+    expect(markup).not.toContain('<button')
+    expect(markup).not.toContain('Inspect')
   })
 
-  it('passes the conversation seat through and no host callbacks', () => {
-    const rows = foldActivityRecords([start(1, T0, 't', 'Running view file')])
-    renderToStaticMarkup(node(rows[0]!))
-    const props = lastCard()
-    expect(props.t).toBe(conversationT)
-    expect('openFile' in props).toBe(false)
-    expect('inspect' in props).toBe(false)
+  it('renders file paths as plain text with no file link or inspect affordance', () => {
+    const rows = foldActivityRecords([
+      start(1, T0, 't', 'Running view file'),
+      update(2, T1, 't', 'completed', { location: { target: '/tmp/a.txt', kind: 'file' }, output: 'hello' }),
+    ])
+    const markup = renderToStaticMarkup(node(rows[0]!))
+    expect(markup).toContain('/tmp/a.txt')
+    expect(markup).toContain('<span')
+    expect(markup).not.toContain('href=')
+    expect(markup).not.toContain('<a ')
+    expect(markup).not.toContain('Inspect')
   })
 
   it('keeps an unknown spawn launch verbatim as an ordinary settled row', () => {
@@ -272,16 +252,10 @@ describe('Antigravity tool row renderer', () => {
       update(80, T2, 'agent:26', 'completed', { output: 'Run parallel review subagents' }),
     ])
     const markup = renderToStaticMarkup(node(rows[0]!))
-    expect(markup).toContain('mock-card')
+    expect(markup).toContain('data-state="done"')
+    expect(markup).toContain('Running start subagent')
+    expect(markup).toContain('Run parallel review subagents')
     expect(markup).not.toContain(en.activityChildUnknown)
-    expect(lastCard()).toMatchObject({
-      toolName: 'Running start subagent',
-      block: {
-        kind: 'tool-result',
-        content: [{ type: 'text', text: 'Run parallel review subagents' }],
-        isError: false,
-      },
-    })
   })
 
   it('settles failed rows as errors with the error text', () => {
@@ -289,22 +263,20 @@ describe('Antigravity tool row renderer', () => {
       start(1, T0, 't', 'read file'),
       update(2, T1, 't', 'failed', { error: 'boom' }),
     ])
-    renderToStaticMarkup(node(rows[0]!))
-    expect(lastCard()).toMatchObject({
-      toolName: 'read',
-      block: { kind: 'tool-result', content: [{ type: 'text', text: 'boom' }], isError: true },
-    })
+    const markup = renderToStaticMarkup(node(rows[0]!))
+    expect(markup).toContain('data-state="error"')
+    expect(markup).toContain(en.statusFailed)
+    expect(markup).toContain('read')
+    expect(markup).toContain('boom')
   })
 
   it('keeps running rows unsettled with raw input preserved verbatim', () => {
     const rows = foldActivityRecords([start(1, T0, 't', 'git status -s')])
     const row = { ...rows[0]!, state: { ...rows[0]!.state, input: 'git status -s' } }
-    renderToStaticMarkup(node(row))
-    const props = lastCard()
-    expect(props.toolName).toBe('git status -s')
-    const block = props.block as Record<string, unknown>
-    expect('kind' in block).toBe(false)
-    expect(block).toMatchObject({ name: 'git status -s', argsRaw: 'git status -s' })
+    const markup = renderToStaticMarkup(node(row))
+    expect(markup).toContain('data-state="running"')
+    expect(markup).toContain(en.statusRunning)
+    expect(markup).toContain('git status -s')
   })
 
   it('carries urls as card data with no outbound anchor of its own', () => {
@@ -313,15 +285,10 @@ describe('Antigravity tool row renderer', () => {
       update(2, T1, 'fetch', 'completed', { location: { target: 'https://example.com/x', kind: 'url' }, output: 'page' }),
     ])
     const markup = renderToStaticMarkup(node(rows[0]!))
+    expect(markup).toContain('web_fetch')
+    expect(markup).toContain('https://example.com/x')
+    expect(markup).toContain('page')
     expect(markup).not.toContain('href=')
-    expect(lastCard()).toMatchObject({
-      toolName: 'web_fetch',
-      block: {
-        kind: 'tool-result',
-        call: { name: 'web_fetch', argsRaw: '{"url":"https://example.com/x"}' },
-        content: [{ type: 'text', text: 'page' }],
-      },
-    })
   })
 
   it('does not invent a child panel from observations without tools', () => {

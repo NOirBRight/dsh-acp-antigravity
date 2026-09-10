@@ -6,11 +6,10 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 
 ## Install and verify
 
-Install every required package in one command. `dsh-acp-provider` is a profile dependency with no bundle of its own; omitting it leaves Antigravity unable to load. The tool-card artifact is an unofficial additive build of DSH rc.1, not an upstream npm release. Model Switch owns the composer picker and runtime lock used with Antigravity.
+Install every required package in one command. `dsh-acp-provider` is a profile dependency with no bundle of its own; omitting it leaves Antigravity unable to load. Native tool rows render through the plugin-owned read-only card; no unofficial ui-tool build is required. Model Switch owns the composer picker and runtime lock used with Antigravity.
 
 ```sh
 dsh plugin --profile web add --force \
-  https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/ui-tool-v0.1.2-rc.1-native.1/deepseek-ai-dsh-client-ui-tool-0.1.2-rc.1-native.1.tgz \
   https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui.tgz \
   https://github.com/NOirBRight/dsh-acp-provider/releases/latest/download/deepseek-ai-dsh-acp-provider.tgz \
   https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch.tgz \
@@ -102,7 +101,7 @@ Normal builds use the published provider and UI artifact pins. To develop a late
 pnpm run check:provider -- /absolute/path/to/dsh-acp-provider
 ```
 
-The command checks each TypeScript face and runs keyless tests against only the provider package’s published exports. It does not launch the native executable or modify the running DSH GUI. Release verification uses a clean frozen-lockfile installation and built host/client smoke without this source override. The tool-card recipe is `node scripts/build-ui-tool.mjs --source=/path/to/dsh-source --out=/fresh/artifact-directory`; it requires the pinned DSH source commit and its prepared build toolchain, rejects existing outputs, and records source, patch, builder and artifact hashes. Retire the compatibility artifact when an upstream release supplies the same public read-only API.
+The command checks each TypeScript face and runs keyless tests against only the provider package’s published exports. It does not launch the native executable or modify the running DSH GUI. Release verification uses a clean frozen-lockfile installation and built host/client smoke without this source override.
 
 ## Session behavior
 
@@ -111,7 +110,7 @@ The command checks each TypeScript face and runs keyless tests against only the 
 - The provider registry confirms and audits full access once before ACP startup.
 - Native permission option IDs are preserved exactly; allow_always is accepted only with a native session or thread scope.
 - Native tool activity is published as activity and is never re-executed by DSH. Malformed updates fail and cancel the active turn without exposing their raw payload.
-- Native tool rows render through the shared DSH `GenericToolCard` as read-only presentation: presentation-only blocks, never a durable DSH tool-call event or execution, with no file-open or inspect affordance; unknown names stay verbatim with their data preserved. The metadata-only runtime forwards actual SDK call names as `agy.toolName`; these take precedence over human-readable command titles. Later names replace permission-preview labels; omitted names preserve the known identity. Both `CommandLine` and `command_line` map to the canonical command argument.
+- Native tool rows render through the plugin-owned read-only card as read-only presentation: presentation-only blocks, never a durable DSH tool-call event or execution, with no file-open or inspect affordance; unknown names stay verbatim with their data preserved. The metadata-only runtime forwards actual SDK call names as `agy.toolName`; these take precedence over human-readable command titles. Later names replace permission-preview labels; omitted names preserve the known identity. Both `CommandLine` and `command_line` map to the canonical command argument.
 - Rows group by native runtime epoch and validated trajectory ownership; `agent-observed` descriptors cover zero-tool children, unowned pending previews remain in the approval UI, whose reason includes native input fields within the configured interaction bounds, until execution metadata arrives, other rows without ownership stay flat, and conflicting or cyclic ancestry keeps agent containers at safe roots without guessing a parent, and child groups start collapsed. No child lifecycle is fabricated: a launch row never claims its child outcome.
 - Assistant deltas and their accumulated turn result are bounded by maxEventTextBytes; provider failure text remains a failed result even when ACP returns end_turn.
 - ACP cancellation sends session/cancel, then closes the transport if the process does not quiesce within the bounded escalation window. Session close and transport-failure teardown use the same bound.

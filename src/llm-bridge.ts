@@ -18,7 +18,7 @@ import type { StreamChunk, ResolvedRetryPolicy, TokenUsage } from '@deepseek-ai/
 import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CollapsedAntigravityModel } from './catalog.js'
 import type { ModelFacts } from './model-metadata.js'
 import { isRecord } from './decode.js'
-import { acpUsage, reportedUsage, withTelemetryKeys } from './usage.js'
+import { acpUsage, hostUsage, reportedUsage, withTelemetryKeys } from './usage.js'
 import { ANTIGRAVITY_USER_QUESTION_ANSWER, ANTIGRAVITY_AGENT_OBSERVED, ANTIGRAVITY_AGENT_TEXT, toDurableAgentEvents, toDurableToolEvents, type AntigravityToolEvent, type AntigravityOwnedEvent } from './tool-events.js'
 
 const APPROVE_LABEL = 'Approve'
@@ -418,7 +418,7 @@ export function createAntigravityLlmBridge(
           if (!state.textOpen) yield { type: 'block-start', index: 1, blockType: 'text' }
           yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
         }
-        for (const sample of usages.splice(0)) yield { type: 'usage', usage: sample }
+        for (const sample of usages.splice(0)) yield { type: 'usage', usage: hostUsage(sample) }
         yield { type: 'finish', reason: finalStatus === 'cancelled'
           ? { kind: 'aborted', failure: { code: 'ABORTED', message: 'Native turn cancelled' } }
           : finalStatus === 'failed'

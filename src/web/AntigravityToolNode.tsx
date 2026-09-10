@@ -1,25 +1,24 @@
-/** One folded native sidecar row through the canonical DSH tool card.
+/* One folded native sidecar row through the plugin-owned read-only card.
  *
  * Pure renderer: no Core, no Chat, no durable DSH tool event. The folded row is
- * adapted to presentation-only GenericToolCard props (see native-tool-card);
- * host callbacks stay omitted, so sidecar paths render as plain text, no file
- * is ever opened, no Inspect pill appears, and nothing here dispatches or
- * executes a tool. The t prop is the conversation locale seat injected by the
- * parent container — never the Antigravity settings copy.
+ * adapted to a presentation-only block (see native-tool-card) and rendered by
+ * AntigravityReadonlyCard, which exposes no host callbacks: sidecar paths stay
+ * plain text, no file is ever opened, no Inspect affordance exists, and nothing
+ * here dispatches or executes a tool. The t prop is the plugin settings copy,
+ * which owns the card labels; the conversation locale seat is not needed.
  */
 import type { JSX } from 'react'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { GenericToolCard } from '@deepseek-ai/dsh-client-ui-tool/client'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { AcpSettingsKey } from './locales.js'
 import type { AntigravityToolRowData } from './native-activity.js'
+import { AntigravityReadonlyCard } from './AntigravityReadonlyCard.js'
 import { nativeToolBlock } from './native-tool-card.js'
 
-/** One folded tool row as the exact native DSH card. */
+/* One folded tool row as the plugin-owned read-only card. */
 export function AntigravityToolNode({ row, t }: {
   readonly row: AntigravityToolRowData
-  readonly t: TranslateNS<'conversation'>
+  readonly t: (key: AcpSettingsKey) => string
 }): JSX.Element {
   const parsed = Date.parse(row.firstSeenAt)
-  const { toolName, callId, block } = nativeToolBlock(row.state, Number.isFinite(parsed) ? parsed : 0)
-  return <GenericToolCard callId={callId} toolName={toolName} block={block} t={t} />
+  const { toolName, nativeName, callId, block } = nativeToolBlock(row.state, Number.isFinite(parsed) ? parsed : 0)
+  return <AntigravityReadonlyCard callId={callId} toolName={toolName} nativeName={nativeName} block={block} t={t} />
 }

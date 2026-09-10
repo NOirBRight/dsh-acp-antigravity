@@ -66,6 +66,22 @@ export function withTelemetryKeys(value: unknown): unknown {
   }
 }
 
+/**
+ * Project validated native accounting onto the official host TokenUsage.
+ * Completeness stays plugin-owned (sidecar telemetry, usage snapshots): only
+ * official count keys cross into host stream chunks and the session log, so a
+ * partial sample can never poison closed host validation or V3 migration.
+ * @param sample - Validated native accounting, possibly carrying usageComplete.
+ * @returns Official count keys only.
+ */
+export function hostUsage(sample: NativeTokenUsage): TokenUsage {
+  const usage: TokenUsage = { inputTokens: sample.inputTokens, outputTokens: sample.outputTokens }
+  for (const key of ['totalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
+    if (sample[key] !== undefined) usage[key] = sample[key]
+  }
+  return usage
+}
+
 export function acpUsage(value: unknown): TokenUsage | undefined {
   if (!isRecord(value)) return undefined
   const input = value.inputTokens ?? value.input_tokens

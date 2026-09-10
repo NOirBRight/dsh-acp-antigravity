@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased] - DSH 0.1.5-rc.1 migration (W1 P4)
+
+- Native tool rows render through the plugin-owned read-only card; the private host GenericToolCard import and the unofficial ui-tool native.1 build (scripts/build-ui-tool.mjs, dsh-ui-tool-native-card.patch) are removed. No official ui-tool package is modified and no core patch is carried.
+- Host stream usage chunks carry official TokenUsage keys only: plugin-owned completeness (usageComplete) stays in sidecar telemetry and snapshots, never in host chunks or the session log.
+- DSH peer/dev declarations target 0.1.5-rc.1 only.
+
 ## [0.1.4] - 2026-09-10
 
 - Settings catalog uses the shared model catalog editor and fetch overlay.
