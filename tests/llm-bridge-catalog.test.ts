@@ -68,10 +68,41 @@ describe('Antigravity LLM catalog Host shape', () => {
       inputModalities: ['text', 'image'],
       context: { contextWindow: 1048576 },
       defaultMaxTokens: 65536,
-      reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }] },
+      reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }], defaultEffort: 'high' },
     })
     const listed = await adapter.listModels('antigravity')
     expect(listed).toEqual([{ provider: 'antigravity', id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }])
+    await adapter.dispose()
+  })
+
+  it('presets a level for a model with no discovery and no saved override', async () => {
+    let cached = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+      { id: 'gemini-pro-agent', name: 'Gemini 3.1 Pro (High)' },
+    ]
+    const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] })
+    const flash = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
+    expect(flash.reasoning?.defaultEffort).toBe('high')
+    expect(flash.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium'])
+    expect((await adapter.resolveModel('antigravity', 'gemini-pro-agent')).reasoning?.defaultEffort).toBe('high')
+    await adapter.dispose()
+  })
+
+  it('lets a saved override replace the preset and falls back to the preset without one', async () => {
+    let cached = [
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+    ]
+    let context: AntigravityCatalogContext = { overrides: { 'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: [], defaultEffort: 'medium' } } } }
+    const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => context)
+    expect((await adapter.resolveModel('antigravity', 'gemini-3.8-flash')).reasoning?.defaultEffort).toBe('medium')
+    // A stored level the catalog can no longer route falls back to the preset.
+    context = { overrides: { 'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: [], defaultEffort: 'low' } } } }
+    expect((await adapter.resolveModel('antigravity', 'gemini-3.8-flash')).reasoning?.defaultEffort).toBe('high')
+    // An override that stores no level keeps the model's own preset.
+    context = { overrides: { 'gemini-3.8-flash': { name: 'Renamed' } } }
+    expect((await adapter.resolveModel('antigravity', 'gemini-3.8-flash')).reasoning?.defaultEffort).toBe('high')
     await adapter.dispose()
   })
 
@@ -94,7 +125,7 @@ describe('Antigravity LLM catalog Host shape', () => {
     await adapter.dispose()
   })
 
-  it('projects the saved default effort over the discovered one and drops an unroutable default', async () => {
+  it('projects the saved default effort over the discovered one and never sends an unroutable one', async () => {
     let cached = [
       { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
       { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
@@ -104,11 +135,12 @@ describe('Antigravity LLM catalog Host shape', () => {
     const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => context)
     const chosen = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
     expect(chosen.reasoning?.defaultEffort).toBe('high')
-    // A stored level the current catalog can no longer route must not reach the Host.
+    // A stored level the current catalog can no longer route must not reach the
+    // Host: the model's own preset stands in for it.
     context = { overrides: { 'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: savedEfforts, defaultEffort: 'medium' } } } }
     const unroutable = await adapter.resolveModel('antigravity', 'gemini-3.8-flash')
     expect(unroutable.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'low'])
-    expect(unroutable.reasoning).not.toHaveProperty('defaultEffort')
+    expect(unroutable.reasoning?.defaultEffort).toBe('high')
     await adapter.dispose()
   })
 

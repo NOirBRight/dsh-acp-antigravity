@@ -6,6 +6,7 @@
 
 ## [Unreleased] - DSH 0.1.5-rc.1 migration (W1 P4)
 
+- Every catalog model carries a default thinking level like the sibling providers: discovery and the account default win, otherwise the highest level the model offers, and a saved override replaces it. Restoring the field returns to that preset, which is catalog data and never stored as an override.
 - A saved catalog override survives any later save that does not touch that field: the payload keeps every field the snapshot already stored, not only the fields edited in this session. Restoring a field clears its override.
 - Saving the model catalog compares each row with the snapshot the card rendered from, so a first edit to default thinking, vision, thinking, context window, name, or output persists instead of being discarded as "unchanged"; a row the user added persists too.
 - Default thinking levels reach the Host model directory: the account-declared default model names its own model's default level, and a saved per-model default is projected instead of only showing in the card. A level the current catalog cannot route is omitted, never sent.

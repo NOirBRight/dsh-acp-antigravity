@@ -8,7 +8,7 @@ describe('Antigravity catalog collapse', () => {
     expect(peelEffort('gemini-pro-agent')).toEqual({ logical: 'gemini-pro-agent' })
   })
 
-  it('exposes discovered High/Medium/Low without inventing a default', () => {
+  it('exposes discovered High/Medium/Low and presets the highest as the default', () => {
     const collapsed = collapseAntigravityModels([
       { id: 'default', name: 'Account default' },
       { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
@@ -20,7 +20,8 @@ describe('Antigravity catalog collapse', () => {
     const flash = collapsed.find(model => model.id === 'gemini-3.8-flash')
     expect(flash?.name).toBe('Gemini 3.8 Flash')
     expect(flash?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium', 'low'])
-    expect(flash?.reasoning?.defaultEffort).toBeUndefined()
+    expect(flash?.reasoning?.defaultEffort).toBe('high')
+    expect(flash?.sources?.defaultEffort).toBeUndefined()
     expect(flash?.effortMap).toEqual({ high: 'gemini-3.8-flash-high', medium: 'gemini-3.8-flash-medium', low: 'gemini-3.8-flash-low' })
     expect(collapsed.find(model => model.id === 'gemini-pro-agent')?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high'])
   })
@@ -32,7 +33,7 @@ describe('Antigravity catalog collapse', () => {
     ])
     expect(collapsed.map(model => model.id)).toEqual(['gemini-3.1-pro'])
     expect(collapsed[0]?.reasoning?.efforts.map(effort => effort.id)).toEqual(['high'])
-    expect(collapsed[0]?.reasoning?.defaultEffort).toBeUndefined()
+    expect(collapsed[0]?.reasoning?.defaultEffort).toBe('high')
     expect(collapsed[0]?.effortMap.high).toBe('gemini-pro-agent')
   })
 
@@ -46,15 +47,35 @@ describe('Antigravity catalog collapse', () => {
     const declared = collapseAntigravityModels(native, new Map(), 'gemini-3.8-flash-high')
     expect(declared.find(model => model.id === 'gemini-3.8-flash')?.reasoning?.defaultEffort).toBe('high')
     expect(declared.find(model => model.id === 'gemini-3.8-flash')?.sources?.defaultEffort).toBe('upstream')
-    expect(declared.find(model => model.id === 'gemini-3.7-flash')?.reasoning?.defaultEffort).toBeUndefined()
-    expect(collapseAntigravityModels(native, new Map(), 'claude-sonnet-4-6').every(model => model.reasoning?.defaultEffort === undefined)).toBe(true)
-    expect(collapseAntigravityModels(native, new Map())[0]?.reasoning?.defaultEffort).toBeUndefined()
+    expect(declared.find(model => model.id === 'gemini-3.7-flash')?.reasoning?.defaultEffort).toBe('high')
+    // A declared id outside the catalog names no model: every row keeps its preset.
+    expect(collapseAntigravityModels(native, new Map(), 'claude-sonnet-4-6').map(model => model.reasoning?.defaultEffort)).toEqual(['high', 'high'])
+    expect(collapseAntigravityModels(native, new Map())[0]?.reasoning?.defaultEffort).toBe('high')
     const unroutable = collapseAntigravityModels(
       [{ id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' }],
       new Map(),
       'gemini-3.8-flash-high',
     )
-    expect(unroutable[0]?.reasoning?.defaultEffort).toBeUndefined()
+    // The declared variant is absent, so the model presets its own highest level.
+    expect(unroutable[0]?.reasoning?.defaultEffort).toBe('medium')
+  })
+
+  it('presets the highest available level per model, never a source or a user override', () => {
+    const collapsed = collapseAntigravityModels([
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
+      { id: 'gemini-pro-agent', name: 'Gemini 3.1 Pro (High)' },
+      { id: 'gemini-3.9-flash-medium', name: 'Gemini 3.9 Flash (Medium)' },
+      { id: 'gemini-3.9-flash-low', name: 'Gemini 3.9 Flash (Low)' },
+    ])
+    const defaultOf = (id: string): string | undefined => collapsed.find(model => model.id === id)?.reasoning?.defaultEffort
+    expect(collapsed.find(model => model.id === 'gemini-3.8-flash')?.reasoning?.efforts.map(item => item.id)).toEqual(['high', 'medium', 'low'])
+    expect(defaultOf('gemini-3.8-flash')).toBe('high')
+    expect(defaultOf('gemini-pro-agent')).toBe('high')
+    // The preset is the highest level the model actually offers, not a fixed id.
+    expect(defaultOf('gemini-3.9-flash')).toBe('medium')
+    expect(collapsed.every(model => model.sources?.defaultEffort === undefined)).toBe(true)
   })
 
   it('keeps upstream output of 65535 instead of a models.dev 65536', () => {

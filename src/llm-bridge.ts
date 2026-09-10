@@ -147,9 +147,15 @@ function collapseCatalog(
     const reasoning = context.overrides?.[model.id]?.reasoning
     if (reasoning === undefined) return model
     const efforts = model.reasoning?.efforts ?? []
-    return reasoning.defaultEffort === undefined
+    // Only a level this model still offers replaces the preset. An override that
+    // stores no longer routable level leaves the model's own default in place.
+    const stored = reasoning.defaultEffort
+    const defaultEffort = stored !== undefined && efforts.some(effort => effort.id === stored)
+      ? stored
+      : model.reasoning?.defaultEffort
+    return defaultEffort === undefined
       ? (model.reasoning === undefined ? model : { ...model, reasoning: { efforts } })
-      : { ...model, reasoning: { efforts, defaultEffort: reasoning.defaultEffort } }
+      : { ...model, reasoning: { efforts, defaultEffort } }
   })
 }
 

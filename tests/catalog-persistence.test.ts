@@ -194,9 +194,40 @@ describe('catalog override persistence', () => {
   it('writes no override while the catalog still matches the snapshot', async () => {
     const { face, server } = bench()
     const row = (await face.load()).rows[0]!
+    // Every row already carries a default level, and saving untouched still stores none.
+    expect(row.models.every(model => model.reasoning?.defaultEffort !== undefined)).toBe(true)
     await face.save(row)
     expect(server.saved().order).toEqual(['gemini-3.8-flash', 'gemini-3.7-flash'])
     expect(server.saved().overrides).toBeUndefined()
+  })
+
+  it('serves a default level for a model with no discovery and no override, without storing one', async () => {
+    const { face, server } = bench()
+    const row = (await face.load()).rows[0]!
+    const preset = modelOf(row, 'gemini-3.7-flash')
+    expect(preset.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'medium', 'low'])
+    expect(preset.reasoning?.defaultEffort).toBe('high')
+    expect(preset.overrides).toBeUndefined()
+    expect(preset.sources?.defaultEffort).toBeUndefined()
+    await face.save(row)
+    expect(server.saved().overrides).toBeUndefined()
+    expect(modelOf((await face.load()).rows[0]!, 'gemini-3.7-flash').reasoning?.defaultEffort).toBe('high')
+  })
+
+  it('lets a saved level replace the preset, and restoring the field returns to the preset', async () => {
+    const { face, server } = bench()
+    let row = (await face.load()).rows[0]!
+    await face.save(withModel(row, 'gemini-3.7-flash', { reasoning: { efforts: modelOf(row, 'gemini-3.7-flash').reasoning!.efforts, defaultEffort: 'low' } }))
+    expect(server.saved().overrides?.['gemini-3.7-flash']?.reasoning?.defaultEffort).toBe('low')
+    expect(server.saved().overrides?.['gemini-3.8-flash']).toBeUndefined()
+    row = (await face.load()).rows[0]!
+    expect(modelOf(row, 'gemini-3.7-flash').reasoning?.defaultEffort).toBe('low')
+    const restored = withModel(row, 'gemini-3.7-flash', { overrides: { defaultEffort: false } })
+    await face.save(restored)
+    expect(server.saved().overrides?.['gemini-3.7-flash']).toBeUndefined()
+    const after = modelOf((await face.load()).rows[0]!, 'gemini-3.7-flash')
+    expect(after.reasoning?.defaultEffort).toBe('high')
+    expect(after.overrides).toBeUndefined()
   })
 
   it('keeps a first capability edit and a user-added row', async () => {

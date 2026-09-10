@@ -138,8 +138,12 @@ export function collapseAntigravityModels(
       ? peelEffort(declaredDefaultModelId).effort
       : undefined
     // Only a routable effort is a default: an id outside efforts cannot be sent.
+    // Discovery and the account's declared default win; otherwise the provider
+    // preset applies, the highest discovered level (EFFORTS order puts high first).
+    // The preset is catalog data, never a user override, so Restore falls back to it.
     const defaultEffort = [discoveredDefault, declaredDefault]
       .find(candidate => candidate !== undefined && efforts.some(item => item.id === candidate))
+      ?? efforts[0]?.id
     const sources: Partial<Record<FactKey, FieldSource>> = {}
     for (const key of ['vision', 'thinking', 'inputTokenLimit', 'maxOutputTokens', 'contextWindow', 'defaultEffort'] as const) {
       const source = agree(facts.map(item => item.sources[key]))
