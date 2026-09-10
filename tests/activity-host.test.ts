@@ -15,7 +15,7 @@ it('stores native activity independently without appending any Core session even
   const append = vi.fn()
   const on = vi.fn(() => () => {})
   const agent = { session: { append } }
-  const scope = { effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} } }
+  const scope = { effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection: { rpc: { handle: () => () => {} } } }
   const ctx: DshPluginContext = {
     on,
     effect: scope.effect,

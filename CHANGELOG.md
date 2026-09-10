@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.5] - DSH 0.1.5-rc.1 migration (W1 P4)
+
+- Fix 3082 profile load crash: the settings RPC channel now registers through an injected connection scope instead of the plugin root ctx (missing inject throws fail-loud at apply).
+
 ## [Unreleased] - DSH 0.1.5-rc.1 migration (W1 P4)
 
 - Native tool rows render through the plugin-owned read-only card; the private host GenericToolCard import and the unofficial ui-tool native.1 build (scripts/build-ui-tool.mjs, dsh-ui-tool-native-card.patch) are removed. No official ui-tool package is modified and no core patch is carried.

@@ -39,7 +39,7 @@ export interface DshPluginConfig {
 export interface DshPluginContext extends ActivityBindingHostContext {
   on: ActivityBindingHostContext['on'] & ((event: 'session/disposed', listener: (session: { readonly id: string }) => void | Promise<void>) => () => void)
   effect(fn: () => unknown, name?: string): void
-  inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => void): void
+  inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void }; connection: DshPluginContext['connection'] }) => void): void
   get?(name: string): unknown
   connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
 }
@@ -322,7 +322,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     })
   }
   ctx.on('session/disposed', session => bridge?.release(session.id))
-  registerAcpSettingsRpc(ctx, {
+  // The settings channel must register through an injected connection scope:
+  // reading ctx.connection on the plugin root ctx throws without inject on the
+  // target host and takes the whole profile down at load.
+  if (typeof ctx.inject !== 'function') throw new Error('dsh-acp-antigravity requires host ctx.inject')
+  ctx.inject(['connection'], scope => registerAcpSettingsRpc(scope, {
     snapshot,
     quota: () => quotaReader.snapshot(),
     readActivity: sessionId => activity.read(sessionId),
@@ -445,7 +449,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       }
       return editor.run(action, signal)
     },
-  })
+  }))
   ctx.effect(() => async () => {
     changing = true
     quotaReader.invalidate()

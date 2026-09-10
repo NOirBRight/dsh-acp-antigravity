@@ -18,12 +18,19 @@ describe('DSH settings plugin', () => {
     homes.push(home)
     process.env.DSH_HOME = home
     const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const injected: string[][] = []
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
       effect: (fn: () => unknown) => fn(),
-      connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
+        injected.push(deps)
+        return run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection })
+      },
+      connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true, modelDiscoveryTimeoutMs: 45_000 })
+    expect(injected).toContainEqual(['connection'])
     const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)
     expect(handler).toEqual(expect.any(Function))
     const result = await handler!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
@@ -37,17 +44,47 @@ describe('DSH settings plugin', () => {
     expect(catalog.value.groups).toEqual([])
   })
 
+  it('registers settings RPC through the injected scope when the root ctx refuses connection', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-settings-scope-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const injected: string[][] = []
+    const ctx = {
+      on: () => () => {},
+      effect: (fn: () => unknown) => fn(),
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
+        injected.push(deps)
+        return run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection })
+      },
+      get connection(): typeof connection {
+        throw new Error('cannot get property "connection" without inject')
+      },
+    }
+    await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
+    expect(injected).toContainEqual(['connection'])
+    expect(handlers.get(ACP_SETTINGS_RPC_CHANNEL)).toEqual(expect.any(Function))
+  })
+
   it('routes sign-in through the coalesced job and sign-out through the editor', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-signin-'))
     homes.push(home)
     process.env.DSH_HOME = home
     const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const injected: string[][] = []
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
       effect: (fn: () => unknown) => fn(),
-      connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
+        injected.push(deps)
+        return run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection })
+      },
+      connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
+    expect(injected).toContainEqual(['connection'])
     const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
     const started = await handler(RUN_ENDPOINT, { action: 'sign-in' }) as { ok: boolean; value: { started?: boolean } }
     expect(started.ok).toBe(true)
@@ -70,12 +107,19 @@ describe('DSH settings plugin', () => {
     await chmod(server, 0o755)
     await chmod(harness, 0o755)
     const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const injected: string[][] = []
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
       effect: (fn: () => unknown) => fn(),
-      connection: { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } },
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
+        injected.push(deps)
+        return run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection })
+      },
+      connection,
     }
     await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
+    expect(injected).toContainEqual(['connection'])
     const result = await handlers.get(ACP_SETTINGS_RPC_CHANNEL)!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
     const snapshot = decodeSnapshot(result.value)
     expect(snapshot?.rows[0]?.installed).toBe(true)

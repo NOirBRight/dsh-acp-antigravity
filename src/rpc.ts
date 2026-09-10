@@ -105,7 +105,7 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
   }
 }
 
-/** Register the host channel and attach its disposer to this fiber. */
+/** Register the host channel and attach its disposer to this fiber. The ctx must be an injected connection scope: touching connection on the plugin root ctx throws without inject on the target host. */
 export function registerAcpSettingsRpc(ctx: { effect(fn: () => unknown, name?: string): void; connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>): unknown } } }, deps: AcpSettingsRpcDeps): void {
   ctx.effect(
     () => ctx.connection.rpc.handle(ACP_SETTINGS_RPC_CHANNEL, createAcpSettingsRpcHandler(deps)),
