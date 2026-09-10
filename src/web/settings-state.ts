@@ -1,5 +1,5 @@
 /** Card state for the state-driven Settings UI. Derived only from the live snapshot row. */
-import type { AcpSettingsRow } from '../client-contract.ts'
+import type { AcpCatalogModel, AcpSettingsRow } from '../client-contract.ts'
 
 /** Visible installation and account setup step. */
 export type AntigravityCardState = 'loading' | 'missing' | 'login' | 'connected'
@@ -44,6 +44,28 @@ export function resolveAntigravityCardState(row: AcpSettingsRow | undefined): An
  */
 export function shouldClearQuota(previous: AcpSettingsRow | undefined, incoming: AcpSettingsRow | undefined): boolean {
   return !incoming?.authenticated || (previous !== undefined && (previous.instanceId !== incoming.instanceId || previous.stateDirectory !== incoming.stateDirectory))
+}
+
+/** Name every catalog field this row changed since the snapshot the card rendered from.
+ *
+ * The editor patches values without touching the row's flags, so flags carried by
+ * the snapshot name only the fields that were already overridden. Comparing the
+ * row against the same row in the last accepted snapshot turns each edit into the
+ * flag the save payload needs, and leaves an untouched row flagless.
+ * @param model - the row about to be persisted.
+ * @param baseline - the same row in the last accepted snapshot, absent for a row the user added.
+ * @returns flag names merged with the row's existing flags, or undefined when nothing changed.
+ */
+export function catalogOverrideFlags(model: AcpCatalogModel, baseline: AcpCatalogModel | undefined): Record<string, boolean> | undefined {
+  const flags: Record<string, boolean> = { ...model.overrides }
+  const changed = (field: string, differs: boolean): void => { if (differs) flags[field] = true }
+  changed('name', model.name !== baseline?.name)
+  changed('vision', model.vision !== baseline?.vision)
+  changed('thinking', model.thinking !== baseline?.thinking)
+  changed('contextWindow', model.contextWindow !== baseline?.contextWindow)
+  changed('output', model.maxOutputTokens !== baseline?.maxOutputTokens)
+  changed('defaultEffort', model.reasoning?.defaultEffort !== baseline?.reasoning?.defaultEffort)
+  return Object.keys(flags).length === 0 ? undefined : flags
 }
 
 /** Merge live health/catalog data without overwriting unsaved configuration edits. */

@@ -24,7 +24,7 @@ import { nativeTurnDefinition } from './native-turn.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
-import { shouldClearQuota } from './settings-state.ts'
+import { catalogOverrideFlags, shouldClearQuota } from './settings-state.ts'
 import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
 
 type ClientContext = Omit<Context, 'connection'> & {
@@ -79,8 +79,12 @@ export function apply(ctx: ClientContext): void {
   const save: AcpSettingsFace['save'] = async (row: AcpSettingsRow) => {
     const catalogOrder = row.models.map(model => model.id).filter(id => id.trim().length > 0)
     const catalogOverrides: Record<string, (typeof row.models)[number]> = {}
+    // The last accepted snapshot is the catalog the user edited from, so a field
+    // that differs from it is an edit worth persisting. Without any snapshot the
+    // caller's flags stand: nothing may be frozen into an override unseen.
+    const edited = acceptedRow === undefined ? undefined : new Map(acceptedRow.models.map(model => [model.id, model]))
     for (const model of row.models) {
-      const flags = model.overrides
+      const flags = edited === undefined ? model.overrides : catalogOverrideFlags(model, edited.get(model.id))
       if (flags === undefined) continue
       const over: { -readonly [K in keyof (typeof row.models)[number]]?: (typeof row.models)[number][K] } = { id: model.id, name: model.name }
       if (flags.vision === true && typeof model.vision === 'boolean') over.vision = model.vision
