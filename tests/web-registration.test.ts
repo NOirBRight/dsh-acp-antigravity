@@ -19,13 +19,15 @@ function registrationBench() {
   const invalidateUsage = vi.fn()
   const rpcCall = vi.fn()
   const effect = (register: () => unknown) => register()
+  const sectionEntries: { options: { id?: string } }[] = []
+  const sectionListeners: Array<() => void> = []
   const ctx = {
     locale: { register: vi.fn(() => vi.fn()), bind: vi.fn(() => (key: string) => key) },
     slots: {
       inject: (_name: string, register: () => unknown) => register(),
       register: (spec: EntrySpec, component: unknown) => { entries.push({ spec, component }); return vi.fn() },
-      entries: () => [] as { options: { id?: string } }[],
-      subscribe: () => () => undefined,
+      entries: () => sectionEntries,
+      subscribe: (_name: string, listener: () => void) => { sectionListeners.push(listener); return () => undefined },
     },
     connection: { rpc: { call: rpcCall } },
     uiConversation: { events: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } } },
@@ -34,7 +36,7 @@ function registrationBench() {
     effect,
   }
   apply(ctx as never)
-  return { entries, definitions, registerProvider, invalidateUsage, rpcCall }
+  return { entries, definitions, registerProvider, invalidateUsage, rpcCall, sectionEntries, sectionListeners }
 }
 
 describe('client plugin composition', () => {
@@ -127,5 +129,42 @@ describe('client plugin composition', () => {
     const bench = registrationBench()
     expect(bench).not.toHaveProperty('conversation')
     expect(bench.entries.map(({ spec }) => spec.name)).toEqual(['settings.provider.item', 'conversation.chat.node'])
+  })
+})
+
+describe('providers page diagnostic', () => {
+  it('drops the missing-owner warning when the providers section registers inside the grace period', () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const bench = registrationBench()
+      vi.advanceTimersByTime(0)
+      expect(warn).not.toHaveBeenCalled()
+      bench.sectionEntries.push({ options: { id: 'providers' } })
+      for (const listener of bench.sectionListeners) listener()
+      vi.advanceTimersByTime(15_000)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('warns once when no providers section registers within the grace period', () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const bench = registrationBench()
+      vi.advanceTimersByTime(14_999)
+      expect(warn).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain('[dsh-acp-antigravity] LLM Providers page missing')
+      for (const listener of bench.sectionListeners) listener()
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
   })
 })

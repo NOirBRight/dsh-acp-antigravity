@@ -41,6 +41,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export const name = 'dsh-acp-antigravity-client'
 export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 
+/** Grace period for dsh-llm-providers-ui to register the providers settings section. */
+const MISSING_OWNER_GRACE_MS = 15_000
+
 function installProviderDirectory(ctx: ClientContext): void {
   ctx.inject(['providerDirectory'], scope => {
     const directory = scope.providerDirectory
@@ -131,15 +134,22 @@ export function apply(ctx: ClientContext): void {
   }, NativeTurnContainer))
   ctx.effect(() => {
     let warned = false
+    const hasProviders = (): boolean =>
+      ctx.slots.entries('settings.section').some(entry => entry.options.id === 'providers')
+    // The providers page registers its section only once the settings snapshot
+    // arrives and the page is visible, so a check at mount time always warns.
+    // The warning waits out the grace period and is dropped if the section appears.
     const check = (): void => {
-      const hasProviders = ctx.slots.entries('settings.section').some(entry => entry.options.id === 'providers')
-      if (!hasProviders && !warned) {
-        warned = true
-        console.warn('[dsh-acp-antigravity] LLM Providers page missing; install dsh-llm-providers-ui to show the Antigravity card.')
-      }
+      if (hasProviders() || warned) return
+      warned = true
+      console.warn('[dsh-acp-antigravity] LLM Providers page missing; install dsh-llm-providers-ui to show the Antigravity card.')
     }
-    const timer = setTimeout(check, 0)
-    const stop = ctx.slots.subscribe('settings.section', check)
+    const timer = setTimeout(check, MISSING_OWNER_GRACE_MS)
+    const stop = ctx.slots.subscribe('settings.section', () => {
+      if (!hasProviders()) return
+      warned = true
+      clearTimeout(timer)
+    })
     return () => { clearTimeout(timer); stop() }
   }, 'dsh-acp-antigravity: providers page diagnostic')
 }
