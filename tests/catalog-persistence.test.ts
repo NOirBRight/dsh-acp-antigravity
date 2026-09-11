@@ -12,7 +12,7 @@ import {
 import type { AcpSettingsFace } from '../src/web/ExternalAgentsSection.tsx'
 import { applyCatalogOverlay, collapseAntigravityModels, type CatalogOverlay } from '../src/catalog.js'
 import { apply } from '../src/web/index.ts'
-import { catalogOverrideFlags } from '../src/web/settings-state.ts'
+import { catalogOverrideFlags, patchedOverrideFlags } from '../src/web/settings-state.ts'
 
 const NATIVE = [
   { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
@@ -214,6 +214,26 @@ describe('catalog override persistence', () => {
     expect(modelOf((await face.load()).rows[0]!, 'gemini-3.7-flash').reasoning?.defaultEffort).toBe('high')
   })
 
+  it('keeps a stored level the user set back to the preset value through a later save', async () => {
+    const { face, server } = bench()
+    let row = (await face.load()).rows[0]!
+    const level = (id: string) => modelOf(row, id).reasoning!.defaultEffort
+    expect(level('gemini-3.8-flash')).toBe('high')
+    await face.save(withModel(row, 'gemini-3.8-flash', { reasoning: { efforts: modelOf(row, 'gemini-3.8-flash').reasoning!.efforts, defaultEffort: 'medium' } }))
+    row = (await face.load()).rows[0]!
+    expect(level('gemini-3.8-flash')).toBe('medium')
+    // Back to the value the catalog already presets: equal to the composed default,
+    // yet still the user's stored choice, so the snapshot must keep flagging it.
+    await face.save(withModel(row, 'gemini-3.8-flash', { reasoning: { efforts: modelOf(row, 'gemini-3.8-flash').reasoning!.efforts, defaultEffort: 'high' } }))
+    row = (await face.load()).rows[0]!
+    expect(level('gemini-3.8-flash')).toBe('high')
+    expect(modelOf(row, 'gemini-3.8-flash').overrides).toEqual({ defaultEffort: true })
+    // A later untouched save must not drop it, the fix4 promise.
+    await face.save(row)
+    expect(server.saved().overrides?.['gemini-3.8-flash']?.reasoning?.defaultEffort).toBe('high')
+    expect(modelOf((await face.load()).rows[0]!, 'gemini-3.8-flash').overrides).toEqual({ defaultEffort: true })
+  })
+
   it('lets a saved level replace the preset, and restoring the field returns to the preset', async () => {
     const { face, server } = bench()
     let row = (await face.load()).rows[0]!
@@ -243,25 +263,78 @@ describe('catalog override persistence', () => {
   })
 })
 
+describe('patchedOverrideFlags', () => {
+  it('marks the fields one editor patch set, and nothing else', () => {
+    expect(patchedOverrideFlags({})).toBeUndefined()
+    expect(patchedOverrideFlags({ contextWindow: '200000' })).toEqual({ contextWindow: true })
+    expect(patchedOverrideFlags({ name: 'Fast', thinking: false })).toEqual({ name: true, thinking: true })
+    // Clearing a field removes it, so there is no user value left to store.
+    expect(patchedOverrideFlags({ vision: undefined, efforts: [] })).toBeUndefined()
+    // The card edits these fields only; an id change is membership, not a flag.
+    expect(patchedOverrideFlags({ id: 'other' })).toBeUndefined()
+  })
+
+  it('feeds a row the snapshot does not carry, so an edit survives the save', () => {
+    const adopted: AcpCatalogModel = {
+      id: 'gemini-3.6-flash',
+      name: 'Gemini 3.6 Flash',
+      contextWindow: 1048576,
+      sources: { contextWindow: 'models.dev' },
+    }
+    const flags = patchedOverrideFlags({ contextWindow: '200000' })
+    if (flags === undefined) throw new Error('the patch set a field')
+    expect(catalogOverrideFlags({ ...adopted, contextWindow: 200000, overrides: flags }, undefined)).toEqual({ name: true, contextWindow: true })
+  })
+})
+
 describe('catalogOverrideFlags', () => {
-  it('names only the fields that differ from the baseline', () => {
-    const baseline: AcpCatalogModel = { id: 'a', name: 'A', vision: true, contextWindow: 100, maxOutputTokens: 10, reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } }
+  const baseline: AcpCatalogModel = { id: 'a', name: 'A', vision: true, contextWindow: 100, maxOutputTokens: 10, reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } }
+
+  it('names the fields the row changed since the baseline', () => {
     expect(catalogOverrideFlags(baseline, baseline)).toBeUndefined()
     expect(catalogOverrideFlags({ ...baseline, name: 'B' }, baseline)).toEqual({ name: true })
     expect(catalogOverrideFlags({ ...baseline, vision: false, thinking: true }, baseline)).toEqual({ vision: true, thinking: true })
     expect(catalogOverrideFlags({ ...baseline, contextWindow: 200, maxOutputTokens: 20 }, baseline)).toEqual({ contextWindow: true, output: true })
     expect(catalogOverrideFlags({ ...baseline, reasoning: { efforts: baseline.reasoning!.efforts, defaultEffort: 'low' } }, baseline)).toEqual({ defaultEffort: true })
-    // A flag the baseline does not corroborate, on a value equal to the baseline, stores nothing.
-    expect(catalogOverrideFlags({ ...baseline, overrides: { name: true } }, baseline)).toBeUndefined()
-    // A field the baseline already stores survives an untouched row and a lost flag alike.
+  })
+
+  it('reads the three override states as stored, restored, and untouched', () => {
+    // Absent: untouched, so only a real difference stores the field.
+    expect(catalogOverrideFlags({ ...baseline, overrides: {} }, baseline)).toBeUndefined()
+    // True: stored already, so an untouched row carries it forward.
     const stored = { ...baseline, overrides: { defaultEffort: true, vision: true } }
     expect(catalogOverrideFlags(stored, stored)).toEqual({ defaultEffort: true, vision: true })
     const { overrides: _lost, ...withoutFlags } = stored
     expect(catalogOverrideFlags(withoutFlags, stored)).toEqual({ defaultEffort: true, vision: true })
+    // True that the snapshot does not corroborate stores nothing: a client flag is not storage.
+    expect(catalogOverrideFlags({ ...baseline, overrides: { name: true } }, baseline)).toBeUndefined()
+    // False: restored, so the field is dropped even though the snapshot stores it.
+    expect(catalogOverrideFlags({ ...stored, overrides: { defaultEffort: false, vision: true } }, stored)).toEqual({ vision: true })
   })
 
-  it('treats every field of a row the snapshot does not carry as an edit', () => {
-    expect(catalogOverrideFlags({ id: 'custom', name: 'Custom', vision: true }, undefined)).toEqual({ name: true, vision: true })
+  it('stores only what a new row itself carries when discovery supplied nothing', () => {
     expect(catalogOverrideFlags({ id: 'custom', name: 'Custom' }, undefined)).toEqual({ name: true })
+    expect(catalogOverrideFlags({ id: 'custom', name: 'Custom', vision: true }, undefined)).toEqual({ name: true, vision: true })
+  })
+
+  it('never freezes the discovery facts an adopted row was built from', () => {
+    // "Fetch models" composes rows from discovery; adopting one the saved membership
+    // excluded adds a row the snapshot lacks, and its sourced values are not user edits.
+    const adopted: AcpCatalogModel = {
+      id: 'gemini-3.6-flash',
+      name: 'Gemini 3.6 Flash',
+      vision: true,
+      thinking: true,
+      contextWindow: 1048576,
+      maxOutputTokens: 65536,
+      reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' },
+      sources: { vision: 'upstream', thinking: 'upstream', contextWindow: 'models.dev', maxOutputTokens: 'upstream', defaultEffort: 'upstream' },
+    }
+    expect(catalogOverrideFlags(adopted, undefined)).toEqual({ name: true })
+    // A field the editor patched carries its flag, so the user's edit is stored.
+    expect(catalogOverrideFlags({ ...adopted, contextWindow: 200000, overrides: { contextWindow: true } }, undefined)).toEqual({ name: true, contextWindow: true })
+    // An unsourced value on the same row is hand-authored and needs no flag.
+    const { contextWindow: _sourced, ...otherSources } = adopted.sources!
+    expect(catalogOverrideFlags({ ...adopted, sources: otherSources, contextWindow: 200000 }, undefined)).toEqual({ name: true, contextWindow: true })
   })
 })

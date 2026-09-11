@@ -8,7 +8,7 @@ import { decodeCatalogModels, type AcpCatalogModel, type AcpSettingsRow, type Ac
 import type { AcpSettingsKey } from './locales.ts'
 import { BrandMark } from './BrandMark.tsx'
 import type {} from 'dsh-llm-providers-ui/client'
-import { mergeSettingsDraft, shouldClearQuota, resolveAntigravityCardState, antigravityAccessKind, antigravityAccessHintKey, type AntigravityAccessKind, type AntigravityCardState } from './settings-state.ts'
+import { mergeSettingsDraft, patchedOverrideFlags, shouldClearQuota, resolveAntigravityCardState, antigravityAccessKind, antigravityAccessHintKey, type AntigravityAccessKind, type AntigravityCardState } from './settings-state.ts'
 import { syncRowKeys } from '../row-keys.js'
 
 /** Live Settings operations injected by the client plugin. Paths stay in the row for save only. */
@@ -217,6 +217,10 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
       const defaultEffort = next.defaultEffort !== undefined && efforts.some(effort => effort.id === next.defaultEffort)
         ? next.defaultEffort
         : undefined
+      // Fields this patch set are the user's own, whatever the row reports as
+      // discovered; the flag is the only edit evidence a row outside the snapshot has.
+      const patched = patchedOverrideFlags(patch)
+      const overrides = patched === undefined ? model.overrides : { ...model.overrides, ...patched }
       const updated: { -readonly [K in keyof AcpCatalogModel]: AcpCatalogModel[K] } = {
         ...model,
         id: next.id.trim(),
@@ -227,7 +231,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
           ? {}
           : { reasoning: { efforts, ...(defaultEffort === undefined ? {} : { defaultEffort }) } }),
         ...(next.sources === undefined ? {} : { sources: next.sources }),
-        ...(next.overrides === undefined ? {} : { overrides: next.overrides }),
+        ...(overrides === undefined ? {} : { overrides }),
       }
       if (contextWindow === undefined) delete updated.contextWindow
       else updated.contextWindow = contextWindow

@@ -46,6 +46,21 @@ export function shouldClearQuota(previous: AcpSettingsRow | undefined, incoming:
   return !incoming?.authenticated || (previous !== undefined && (previous.instanceId !== incoming.instanceId || previous.stateDirectory !== incoming.stateDirectory))
 }
 
+/** Override flags one editor patch adds: the fields the user just set to a value.
+ *
+ * The editor reports only what changed, which is the single piece of edit evidence a
+ * row outside the accepted snapshot has; a patch that clears a field sets no flag.
+ * @param patch - the catalog patch handed to the card.
+ * @returns flag names to merge into the row, or undefined when the patch set nothing.
+ */
+export function patchedOverrideFlags(patch: Readonly<Record<string, unknown>>): Record<string, boolean> | undefined {
+  const flags: Record<string, boolean> = {}
+  for (const field of ['name', 'vision', 'thinking', 'contextWindow', 'defaultEffort']) {
+    if (patch[field] !== undefined) flags[field] = true
+  }
+  return Object.keys(flags).length === 0 ? undefined : flags
+}
+
 /** Name every catalog field the save payload must store as a user override.
  *
  * The payload replaces the stored override set, so a field is stored when either
@@ -54,25 +69,45 @@ export function shouldClearQuota(previous: AcpSettingsRow | undefined, incoming:
  * second case is what keeps an earlier save from being cleared by any later save
  * the user makes without touching that field.
  *
- * The row's own flags are a client-side signal, not storage: false means the user
- * restored the field to discovery, so the field is dropped instead of carried over.
+ * Three states share one flag map, and only these meanings are supported:
+ * `true` the field is stored as a user override; `false` the user restored it, so
+ * it must not be stored; an absent key the field is untouched. A `true` the snapshot
+ * does not corroborate stores nothing: the map is a client signal for actions, and
+ * the snapshot is the only record of what was actually written.
+ *
+ * A row the baseline does not carry is either brand new or absent from the saved
+ * membership. There the editor's `true` is the only evidence of a user edit, and a
+ * value discovery supplied without one stays the catalog's: adopting a discovered
+ * model must not freeze the facts it was built from. A caller with no snapshot at
+ * all must not call this: it has nothing to compare against and keeps the row's own
+ * flags instead.
  * @param model - the row about to be persisted.
- * @param baseline - the same row in the last accepted snapshot, absent for a row the user added.
+ * @param baseline - the same row in the last accepted snapshot, or undefined when that snapshot does not carry it.
  * @returns fields to write, or undefined when the row stores no override.
  */
 export function catalogOverrideFlags(model: AcpCatalogModel, baseline: AcpCatalogModel | undefined): Record<string, boolean> | undefined {
   const flags: Record<string, boolean> = {}
   const stored = baseline?.overrides ?? {}
-  const field = (name: string, differs: boolean): void => {
+  const store = (name: string, differs: boolean): void => {
     if (model.overrides?.[name] === false) return
     if (differs || stored[name] === true) flags[name] = true
   }
-  field('name', model.name !== baseline?.name)
-  field('vision', model.vision !== baseline?.vision)
-  field('thinking', model.thinking !== baseline?.thinking)
-  field('contextWindow', model.contextWindow !== baseline?.contextWindow)
-  field('output', model.maxOutputTokens !== baseline?.maxOutputTokens)
-  field('defaultEffort', model.reasoning?.defaultEffort !== baseline?.reasoning?.defaultEffort)
+  /** A row the baseline lacks: the editor's own `true` is the only edit evidence. */
+  const storeEdit = (name: string, source: string, differs: boolean): void => {
+    if (baseline !== undefined) return store(name, differs)
+    if (model.overrides?.[name] === true) return store(name, true)
+    // Discovery supplied the value and nothing says the user changed it: storing it
+    // would freeze a fact the catalog owns and block its later updates.
+    if (model.sources?.[source] !== undefined) return
+    store(name, differs)
+  }
+  // A name is never a discovery fact, so it is always the user's own.
+  store('name', model.name !== baseline?.name)
+  storeEdit('vision', 'vision', model.vision !== baseline?.vision)
+  storeEdit('thinking', 'thinking', model.thinking !== baseline?.thinking)
+  storeEdit('contextWindow', 'contextWindow', model.contextWindow !== baseline?.contextWindow)
+  storeEdit('output', 'maxOutputTokens', model.maxOutputTokens !== baseline?.maxOutputTokens)
+  storeEdit('defaultEffort', 'defaultEffort', model.reasoning?.defaultEffort !== baseline?.reasoning?.defaultEffort)
   return Object.keys(flags).length === 0 ? undefined : flags
 }
 

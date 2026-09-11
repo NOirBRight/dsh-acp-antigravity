@@ -182,6 +182,25 @@ export type CatalogOverlay = {
   readonly reasoning?: { readonly defaultEffort?: string; readonly efforts?: readonly { readonly id: string; readonly name: string }[] }
 }
 
+/** Field names one stored override carries, excluding the name it always carries.
+ *
+ * An override is recognised by the fields it holds, never by comparing the composed
+ * row with discovery: a stored level the user set back to the discovered value is
+ * still a stored override, so no later save clears it.
+ * @param over one saved override entry.
+ * @returns the flag names that entry stores.
+ */
+function storedOverrideFlags(over: CatalogOverlay): Record<string, boolean> {
+  const flags: Record<string, boolean> = {}
+  if (typeof over.vision === 'boolean') flags.vision = true
+  if (typeof over.thinking === 'boolean') flags.thinking = true
+  if (typeof over.contextWindow === 'number') flags.contextWindow = true
+  if (typeof over.inputTokenLimit === 'number') flags.inputLimit = true
+  if (typeof over.maxOutputTokens === 'number') flags.output = true
+  if (over.reasoning?.defaultEffort !== undefined) flags.defaultEffort = true
+  return flags
+}
+
 /** Apply saved membership and field overrides. Undefined order means every discovered row.
  * @param discovered collapsed native rows.
  * @param order saved ids, including manual rows; empty hides every discovered row.
@@ -214,7 +233,7 @@ export function applyCatalogOverlay(
         ...(over.reasoning?.efforts === undefined
           ? {}
           : { reasoning: { efforts: over.reasoning.efforts, ...(over.reasoning.defaultEffort === undefined ? {} : { defaultEffort: over.reasoning.defaultEffort }) } }),
-        overrides: { name: true },
+        overrides: { name: true, ...storedOverrideFlags(over) },
       }
       return [row]
     }
@@ -230,14 +249,10 @@ export function applyCatalogOverlay(
       efforts: over.reasoning?.efforts ?? base.reasoning?.efforts ?? [],
       ...(defaultEffort === undefined ? {} : { defaultEffort }),
     }
-    const flags: Record<string, boolean> = {}
+    const flags = storedOverrideFlags(over)
+    // A name is only an override when it stops matching discovery: every saved
+    // entry carries the row's current name, so presence means nothing for it.
     if (name !== base.name) flags.name = true
-    if (vision !== base.vision && typeof over.vision === 'boolean') flags.vision = true
-    if (thinking !== base.thinking && typeof over.thinking === 'boolean') flags.thinking = true
-    if (contextWindow !== base.contextWindow && typeof over.contextWindow === 'number') flags.contextWindow = true
-    if (inputTokenLimit !== base.inputTokenLimit && typeof over.inputTokenLimit === 'number') flags.inputLimit = true
-    if (maxOutputTokens !== base.maxOutputTokens && typeof over.maxOutputTokens === 'number') flags.output = true
-    if ((reasoning?.defaultEffort ?? undefined) !== base.reasoning?.defaultEffort && defaultEffort !== undefined) flags.defaultEffort = true
     return [{
       ...base,
       name,

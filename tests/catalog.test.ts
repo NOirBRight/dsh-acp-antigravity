@@ -103,17 +103,41 @@ describe('Antigravity catalog collapse', () => {
     expect(manual.map(model => model.id)).toEqual(['custom-id'])
   })
 
-  it('flags only fields that differ from discovery', () => {
+  it('flags the fields a saved override carries, and a rename on top of them', () => {
     const discovered = collapseAntigravityModels([
       { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
       { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
     ])
-    const base = discovered.find(model => model.id === 'gemini-3.8-flash')!
     const applied = applyCatalogOverlay(discovered, undefined, {
-      'gemini-3.8-flash': { ...base, name: 'Renamed', vision: base.vision === true ? false : true },
+      'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', vision: true, reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }], defaultEffort: 'low' } },
     })
-    expect(applied[0]?.overrides).toEqual({ name: true, vision: true })
-    expect(applyCatalogOverlay(discovered, undefined, { 'gemini-3.8-flash': { ...base } })[0]?.overrides).toBeUndefined()
+    // Every fired field is flagged even where the composed value matches discovery:
+    // an override the user saved stays visible to the client so no later save drops it.
+    expect(applied[0]?.overrides).toEqual({ vision: true, defaultEffort: true })
+    expect(applied[0]?.reasoning?.defaultEffort).toBe('low')
+  })
+
+  it('keeps a stored override that equals the discovered value, including the preset', () => {
+    const discovered = collapseAntigravityModels([
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+    ])
+    expect(discovered[0]?.reasoning?.defaultEffort).toBe('high')
+    // The user picked the level the catalog already presets: the value matches, the
+    // override is still stored, so the next save must carry it instead of dropping it.
+    const applied = applyCatalogOverlay(discovered, undefined, {
+      'gemini-3.8-flash': { name: 'Gemini 3.8 Flash', reasoning: { efforts: discovered[0]!.reasoning!.efforts, defaultEffort: 'high' } },
+    })
+    expect(applied[0]?.reasoning?.defaultEffort).toBe('high')
+    expect(applied[0]?.overrides?.defaultEffort).toBe(true)
+  })
+
+  it('flags a renamed row and a manual row, which has no discovery to differ from', () => {
+    const discovered = collapseAntigravityModels([{ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' }])
+    const renamed = applyCatalogOverlay(discovered, undefined, { 'gemini-3.8-flash': { name: 'Fast' } })
+    expect(renamed[0]?.overrides).toEqual({ name: true })
+    const manual = applyCatalogOverlay(discovered, ['custom-id'], { 'custom-id': { name: 'Custom', vision: true } })
+    expect(manual[0]?.overrides).toEqual({ name: true, vision: true })
   })
 
   it('maps logical id plus effort back to discovered native ids only', () => {

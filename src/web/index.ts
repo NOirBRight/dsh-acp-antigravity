@@ -80,8 +80,8 @@ export function apply(ctx: ClientContext): void {
     const catalogOrder = row.models.map(model => model.id).filter(id => id.trim().length > 0)
     const catalogOverrides: Record<string, (typeof row.models)[number]> = {}
     // The last accepted snapshot is the catalog the user edited from, so a field
-    // that differs from it is an edit worth persisting. Without any snapshot the
-    // caller's flags stand: nothing may be frozen into an override unseen.
+    // that differs from it is an edit worth persisting. Without any snapshot there
+    // is nothing to compare against, so the caller's flags stand unchanged.
     const edited = acceptedRow === undefined ? undefined : new Map(acceptedRow.models.map(model => [model.id, model]))
     for (const model of row.models) {
       const flags = edited === undefined ? model.overrides : catalogOverrideFlags(model, edited.get(model.id))

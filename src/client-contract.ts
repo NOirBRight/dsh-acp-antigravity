@@ -35,6 +35,7 @@ export interface AcpCatalogModel {
   readonly contextWindow?: number
   readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string }
   readonly sources?: Readonly<Record<string, string>>
+  /** Per-field override flags: `true` stored as a user override, `false` restored to the catalog value, absent untouched. */
   readonly overrides?: Readonly<Record<string, boolean>>
 }
 
