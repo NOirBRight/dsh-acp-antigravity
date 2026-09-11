@@ -73,7 +73,7 @@
     "@agentclientprotocol/sdk": "0.25.1"
   },
   "devDependencies": {
-    "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.12/dsh-llm-providers-ui-0.1.12.tgz",
+    "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.12-015rc1d/dsh-llm-providers-ui-0.1.12.tgz",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-client-connection": "0.1.5-rc.1",
     "@deepseek-ai/dsh-client-locale": "0.1.5-rc.1",
