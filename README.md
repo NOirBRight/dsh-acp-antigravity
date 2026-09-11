@@ -10,10 +10,10 @@ Install every required package in one command. `dsh-acp-provider` is a profile d
 
 ```sh
 dsh plugin --profile web add --force \
-  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui.tgz \
-  https://github.com/NOirBRight/dsh-acp-provider/releases/latest/download/deepseek-ai-dsh-acp-provider.tgz \
-  https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch.tgz \
-  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-dsh-acp-antigravity.tgz
+  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.12-015rc1d/dsh-llm-providers-ui-0.1.12.tgz \
+  https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.2/deepseek-ai-dsh-acp-provider-0.1.2.tgz \
+  https://github.com/NOirBRight/dsh-model-switch/releases/download/v0.4.9-015rc1/dsh-model-switch-0.4.9.tgz \
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.5-015rc1g/deepseek-ai-dsh-acp-antigravity-0.1.5.tgz
 dsh plugin --profile web list
 ```
 
