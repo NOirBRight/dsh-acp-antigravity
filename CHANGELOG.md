@@ -1,11 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
 ## [0.1.5] - DSH 0.1.5-rc.1 migration (W1 P4)
 
 - Fix 3082 profile load crash: the settings RPC channel now registers through an injected connection scope instead of the plugin root ctx (missing inject throws fail-loud at apply).
-
-## [Unreleased] - DSH 0.1.5-rc.1 migration (W1 P4)
-
 - A stored catalog override is recognised by the fields it holds, not by comparing values with discovery, so setting a field back to the catalog value no longer lets a later save clear it.
 - A model the accepted snapshot does not carry stores only what the editor actually set: adopting a discovered model no longer freezes the facts it was built from.
 - Every catalog model carries a default thinking level like the sibling providers: discovery and the account default win, otherwise the highest level the model offers, and a saved override replaces it. Restoring the field returns to that preset, which is catalog data and never stored as an override.
