@@ -1,0 +1,352 @@
+--- server.py
++++ server.py
+@@ -1348,3 +1348,348 @@
+-class AgyAdapter(Agent):
++# BEGIN AGY-REQUEST-TELEMETRY
++import asyncio as _request_asyncio
++import threading as _request_threading
++import time as _request_time
++
++_REQUEST_TELEMETRY_META_KEY = "agy.requestTelemetry"
++_USAGE_SNAPSHOTS_META_KEY = "agy.usageSnapshots"
++_SNAPSHOT_FIELDS = (
++    "prompt_token_count", "candidates_token_count", "thoughts_token_count",
++    "total_token_count", "cached_content_token_count")
++_request_telemetry_lock = _request_threading.Lock()
++_request_telemetry_by_session = {}
++_request_telemetry_slot = _request_threading.local()
++
++
++def _request_telemetry_usage(payload):
++  """Read usage only; request/response content and credentials are never retained."""
++  try:
++    value = json.loads(payload)
++  except (ValueError, UnicodeDecodeError):
++    return None
++  if not isinstance(value, dict):
++    return None
++  inner = value.get("response", value)
++  if not isinstance(inner, dict):
++    return None
++  usage = inner.get("usageMetadata", inner.get("usage_metadata"))
++  return usage if isinstance(usage, dict) else None
++
++
++def _request_telemetry_bag(prompt_id, session_key, records):
++  return {
++      "version": 1, "provenance": "ccpa-proxy", "scope": "session",
++      "promptId": prompt_id, "sessionKey": session_key, "requests": list(records),
++  }
++
++
++def _request_telemetry_snap_rev(snapshot):
++  if snapshot is None:
++    return None
++  return tuple(snapshot.get(name) for name in _SNAPSHOT_FIELDS)
++
++
++def _request_telemetry_sdk_snapshot(adapter, session_id):
++  try:
++    return _usage_snapshot(_cumulative_usage(adapter._sessions[session_id].agent))
++  except Exception:
++    return None
++
++
++def _request_telemetry_sdk_baseline(adapter, session_id):
++  """Read fresh flag and SDK counters without consuming the session epoch."""
++  try:
++    data = adapter._sessions[session_id]
++    fresh = bool(getattr(data, "usage_epoch_is_fresh", False))
++  except Exception:
++    return None
++  try:
++    start = _usage_snapshot(_cumulative_usage(data.agent))
++  except Exception:
++    start = None
++  if start is not None:
++    start = dict(start)
++  return {"baseline": "fresh-session" if fresh else "cumulative", "start": start}
++
++
++def _request_telemetry_begin(model):
++  scope = getattr(_request_telemetry_slot, "current", None)
++  if not isinstance(scope, dict) or scope.get("records") is None or not isinstance(model, str) or not model:
++    return None
++  return (scope, _request_time.monotonic(), {
++      "requestId": uuid.uuid4().hex, "model": model,
++      "status": "cancelled", "durationMs": 0.0, "usageMetadata": None,
++  })
++
++
++def _request_telemetry_consume(done):
++  try:
++    done.result()
++  except BaseException:
++    pass
++  pending = getattr(done, "_request_telemetry_pending", None)
++  if pending is not None:
++    with _request_telemetry_lock:
++      pending.discard(done)
++
++
++def _request_telemetry_build_update(scope):
++  adapter = scope.get("adapter")
++  session_id = scope.get("session_id")
++  session_key = scope.get("sessionKey")
++  if adapter is None or not isinstance(session_id, str) or not session_id or not isinstance(session_key, str) or not session_key:
++    return None
++  try:
++    prompt_id = adapter._prompt_ids.get(session_id)
++    client = getattr(adapter, "_client", None)
++  except Exception:
++    return None
++  if not isinstance(prompt_id, str) or not prompt_id or prompt_id == scope.get("prompt_id_at_entry"):
++    return None
++  if client is None or not hasattr(client, "session_update"):
++    return None
++  end = _request_telemetry_sdk_snapshot(adapter, session_id)
++  with _request_telemetry_lock:
++    if scope.get("closed"):
++      return None
++    records = list(scope["records"])
++    rev = (len(records), _request_telemetry_snap_rev(end))
++    if scope.get("last_rev") == rev:
++      return None
++    scope["last_rev"] = rev
++  meta = {_REQUEST_TELEMETRY_META_KEY: _request_telemetry_bag(prompt_id, session_key, records)}
++  if "baseline" in scope:
++    meta[_USAGE_SNAPSHOTS_META_KEY] = {
++        "version": 1, "provenance": "sdk-cumulative",
++        "promptId": prompt_id, "sessionKey": session_key,
++        "baseline": scope["baseline"], "completed": False,
++        "start": scope.get("start"), "end": end,
++    }
++  try:
++    return client, session_id, schema.SessionInfoUpdate(
++        session_update="session_info_update", field_meta=meta)
++  except Exception:
++    return None
++
++
++def _request_telemetry_progress(scope):
++  """Schedule a live bag for completed requests; never blocks the HTTP thread."""
++  loop = scope.get("loop")
++  pending = scope.get("pending")
++  if loop is None or pending is None:
++    return
++  built = _request_telemetry_build_update(scope)
++  if built is None:
++    return
++  client, session_id, update = built
++  try:
++    fut = _request_asyncio.run_coroutine_threadsafe(
++        client.session_update(session_id=session_id, update=update), loop)
++  except Exception:
++    return
++  fut._request_telemetry_pending = pending
++  with _request_telemetry_lock:
++    if scope.get("closed"):
++      fut.cancel()
++    else:
++      pending.add(fut)
++  fut.add_done_callback(_request_telemetry_consume)
++
++
++async def _request_telemetry_emit_live(adapter, session_id):
++  try:
++    key = session_store.SESSION_FILE_PREFIX + session_id
++    with _request_telemetry_lock:
++      scope = _request_telemetry_by_session.get(key)
++    if not isinstance(scope, dict) or scope.get("records") is None:
++      return
++    built = _request_telemetry_build_update(scope)
++    if built is None:
++      return
++    client, sid, update = built
++    await client.session_update(session_id=sid, update=update)
++  except Exception:
++    return
++
++
++def _request_telemetry_finish(attempt, status):
++  scope, started, record = attempt
++  record["status"] = status
++  record["durationMs"] = (_request_time.monotonic() - started) * 1000
++  emit = False
++  with _request_telemetry_lock:
++    scope["records"].append(record)
++    if status == "completed" and not scope.get("closed"):
++      emit = True
++  if emit:
++    _request_telemetry_progress(scope)
++
++
++class _RequestTelemetryIterator:
++  """Owns upstream closure even when downstream closes before its first read."""
++  def __init__(self, body, attempt, status):
++    self.body = iter(body)
++    self.attempt = attempt
++    self.status = "completed" if 200 <= status < 300 else "failed"
++    self.done = False
++
++  def __iter__(self):
++    return self
++
++  def _finish(self, status):
++    if self.done:
++      return
++    self.done = True
++    try:
++      close = getattr(self.body, "close", None)
++      if close is not None:
++        close()
++    finally:
++      _request_telemetry_finish(self.attempt, status)
++
++  def __next__(self):
++    if self.done:
++      raise StopIteration
++    try:
++      line = next(self.body)
++    except StopIteration:
++      self._finish(self.status)
++      raise
++    except BaseException:
++      self._finish("failed")
++      raise
++    if line.lstrip().startswith(b"data:"):
++      usage = _request_telemetry_usage(line.lstrip()[5:])
++      if usage is not None:
++        self.attempt[2]["usageMetadata"] = usage
++    return line
++
++  def close(self):
++    self._finish("cancelled")
++
++
++def _request_telemetry_wrap_stream(original):
++  def wrapped(*args, **kwargs):
++    attempt = _request_telemetry_begin(kwargs.get("model"))
++    if attempt is None:
++      return original(*args, **kwargs)
++    try:
++      status, headers, body = original(*args, **kwargs)
++    except BaseException:
++      _request_telemetry_finish(attempt, "failed")
++      raise
++    return status, headers, _RequestTelemetryIterator(body, attempt, status)
++  return wrapped
++
++
++def _request_telemetry_wrap_unary(original):
++  def wrapped(*args, **kwargs):
++    attempt = _request_telemetry_begin(kwargs.get("model"))
++    if attempt is None:
++      return original(*args, **kwargs)
++    status = "failed"
++    try:
++      code, headers, body = original(*args, **kwargs)
++      attempt[2]["usageMetadata"] = _request_telemetry_usage(body)
++      status = "completed" if 200 <= code < 300 else "failed"
++      return code, headers, body
++    finally:
++      _request_telemetry_finish(attempt, status)
++  return wrapped
++
++
++def _request_telemetry_attach(response, prompt_id, session_key, records):
++  meta = dict(response.field_meta or {})
++  meta[_REQUEST_TELEMETRY_META_KEY] = _request_telemetry_bag(prompt_id, session_key, records)
++  return response.copy(update={"field_meta": meta})
++
++
++def _install_request_telemetry(adapter_class):
++  original_post = proxy_server.ProxyHandler.do_POST
++  original_prompt = adapter_class.prompt
++  original_live = getattr(adapter_class, "_stream_live_step", None)
++
++  def post(handler):
++    previous = getattr(_request_telemetry_slot, "current", None)
++    key = handler.headers.get("X-ACP-Trajectory-Id")
++    with _request_telemetry_lock:
++      bucket = _request_telemetry_by_session.get(key)
++    if isinstance(bucket, dict) and bucket.get("records") is not None:
++      bucket["sessionKey"] = key
++      _request_telemetry_slot.current = bucket
++    else:
++      _request_telemetry_slot.current = {"sessionKey": key, "records": None}
++    try:
++      return original_post(handler)
++    finally:
++      _request_telemetry_slot.current = previous
++
++  async def prompt(adapter, prompt, session_id, *args, **kwargs):
++    key = session_store.SESSION_FILE_PREFIX + session_id
++    records = []
++    pending = set()
++    try:
++      loop = _request_asyncio.get_running_loop()
++    except RuntimeError:
++      loop = None
++    try:
++      prompt_id_at_entry = adapter._prompt_ids.get(session_id)
++    except Exception:
++      prompt_id_at_entry = None
++    captured = _request_telemetry_sdk_baseline(adapter, session_id)
++    start = None if captured is None else captured.get("start")
++    bucket = {
++        "records": records, "adapter": adapter, "loop": loop,
++        "session_id": session_id, "sessionKey": key, "pending": pending,
++        "closed": False, "prompt_id_at_entry": prompt_id_at_entry,
++        "last_rev": (0, _request_telemetry_snap_rev(start)),
++    }
++    if captured is not None:
++      bucket["baseline"] = captured["baseline"]
++      bucket["start"] = start
++    with _request_telemetry_lock:
++      if key in _request_telemetry_by_session:
++        raise RuntimeError("Concurrent telemetry prompt for the same native session")
++      _request_telemetry_by_session[key] = bucket
++    try:
++      response = await original_prompt(adapter, prompt, session_id, *args, **kwargs)
++      prompt_id = adapter._prompt_ids.get(session_id)
++      if prompt_id is None:
++        return response
++      with _request_telemetry_lock:
++        return _request_telemetry_attach(response, prompt_id, key, records)
++    finally:
++      with _request_telemetry_lock:
++        popped = _request_telemetry_by_session.pop(key, None)
++        if isinstance(popped, dict):
++          popped["closed"] = True
++        to_cancel = list(pending)
++        pending.clear()
++      for fut in to_cancel:
++        fut.cancel()
++
++  async def live_step(adapter, session_id, *args, **kwargs):
++    try:
++      await _request_telemetry_emit_live(adapter, session_id)
++    except Exception:
++      pass
++    try:
++      return await original_live(adapter, session_id, *args, **kwargs)
++    finally:
++      try:
++        await _request_telemetry_emit_live(adapter, session_id)
++      except Exception:
++        pass
++
++  ccpa_client.stream_generate_content = _request_telemetry_wrap_stream(ccpa_client.stream_generate_content)
++  ccpa_client.generate_content = _request_telemetry_wrap_unary(ccpa_client.generate_content)
++  proxy_server.ProxyHandler.do_POST = post
++  adapter_class.prompt = prompt
++  if original_live is not None:
++    adapter_class._stream_live_step = live_step
++  return adapter_class
++# END AGY-REQUEST-TELEMETRY
++
++@_install_request_telemetry
++class AgyAdapter(Agent):
+ 
+   """Antigravity ACP Server Adapter."""

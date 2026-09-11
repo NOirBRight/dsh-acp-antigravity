@@ -1,0 +1,6 @@
+# Host-plane Antigravity ACP provider with shared Provider settings.
+- insert:
+    - id: dsh-acp-antigravity
+      name: '@deepseek-ai/dsh-acp-antigravity'
+      config:
+        enabled: true
