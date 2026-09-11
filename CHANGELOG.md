@@ -16,6 +16,7 @@
 - Native tool rows render through the plugin-owned read-only card; the private host GenericToolCard import and the unofficial ui-tool native.1 build (scripts/build-ui-tool.mjs, dsh-ui-tool-native-card.patch) are removed. No official ui-tool package is modified and no core patch is carried.
 - Host stream usage chunks carry official TokenUsage keys only: plugin-owned completeness (usageComplete) stays in sidecar telemetry and snapshots, never in host chunks or the session log.
 - A failed probe, initialization, or session start is reported as its own "Connection failed" card state with the host message and a refresh action, instead of claiming the account needs sign-in; a genuinely signed-out account still shows "Sign-in required".
+- A cancelled operation no longer records a provider failure: stopping a turn, aborting a Settings request, or any other caller cancellation leaves the account status exactly as it was, so a cancelled turn can no longer read as "Sign-in required". A discovery deadline the provider itself arms still reports when it expires.
 - DSH peer/dev declarations target 0.1.5-rc.1 only.
 
 ## [0.1.4] - 2026-09-10

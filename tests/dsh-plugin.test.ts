@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, decodeSnapshot, name, inject, requestNativeApproval } from '../src/index.js'
 import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
@@ -155,6 +156,47 @@ describe('DSH settings plugin', () => {
     const result = await handler(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
     expect(decodeSnapshot(result.value)?.rows[0]).toMatchObject({ installed: true, authenticated: false, ready: false, probeFailed: true })
   })
+
+  it('keeps a ready row when the caller cancels a model refresh', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-cancel-refresh-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-acp-cancel-bin-'))
+    homes.push(dir)
+    const { chmod, copyFile, writeFile } = await import('node:fs/promises')
+    // The fixture is an ESM module, so the copy keeps a .mjs name: Node refuses an unknown
+    // extension on a file whose source it detects as ESM.
+    const server = join(dir, 'agy_acp_server.mjs')
+    const harness = join(dir, 'localharness_external')
+    await copyFile(fileURLToPath(new URL('./fixtures/acp-freeform-peer.mjs', import.meta.url)), server)
+    await writeFile(harness, '#!/bin/sh\nexit 0\n')
+    await chmod(server, 0o755)
+    await chmod(harness, 0o755)
+    const handlers = new Map<string, (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>>()
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const ctx = {
+      on: () => () => {},
+      effect: (fn: () => unknown) => fn(),
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection }),
+      connection,
+    }
+    await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
+    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    // The mount-time catalog probe runs unawaited; let it settle before measuring the row.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const refreshed = await handler(RUN_ENDPOINT, { action: 'refresh-models' }) as { ok: boolean }
+    expect(refreshed.ok).toBe(true)
+    expect(decodeSnapshot(((await handler(SNAPSHOT_ENDPOINT, {})) as { value: unknown }).value)?.rows[0]).toMatchObject({ installed: true, authenticated: true, ready: true })
+    const reader = new AbortController()
+    reader.abort()
+    const cancelled = await handler(RUN_ENDPOINT, { action: 'refresh-models' }, reader.signal) as { ok: boolean; error?: { message?: string } }
+    expect(cancelled.ok).toBe(false)
+    expect(cancelled.error?.message).toMatch(/abort/i)
+    const row = decodeSnapshot(((await handler(SNAPSHOT_ENDPOINT, {})) as { value: unknown }).value)?.rows[0]
+    expect(row).toMatchObject({ installed: true, authenticated: true, ready: true })
+    expect(row?.probeFailed).toBeUndefined()
+    expect(row?.message ?? '').not.toMatch(/abort/i)
+  }, 30_000)
 
   it('routes native approval through the exact session agent without a Core call id', async () => {
     const seen: Record<string, unknown>[] = []

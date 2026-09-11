@@ -5,6 +5,7 @@ import { zPromptResponse } from '@agentclientprotocol/sdk/dist/schema/zod.gen.js
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ExternalAgentProviderRegistry, TurnAbortedError, auditId, createSessionModelRoute, optionId, providerInstanceId, resumeCursor, sessionId, turnId, type ExternalAgentTurnHost } from '@deepseek-ai/dsh-acp-provider'
 import {
   antigravityClientCapabilities,
@@ -99,6 +100,8 @@ function clientFilesystem() {
   }
 }
 function launchSpec(): AntigravityLaunchSpec { return { command: '/opt/agy/agy_acp_server', args: ['--uid='], cwd: '/workspace', env: {}, shell: false, extendEnv: false } }
+/** Real stdio ACP peer, so cancellation reaches the protocol layer instead of a fake. */
+function fixtureLaunchSpec(): AntigravityLaunchSpec { return { command: fileURLToPath(new URL('./fixtures/acp-freeform-peer.mjs', import.meta.url)), args: [], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, shell: false, extendEnv: false } }
 function host(events: string[] = []): ExternalAgentTurnHost {
   return {
     publish: async event => { events.push(event.type) },
@@ -454,6 +457,40 @@ describe('Antigravity provider lifecycle', () => {
     await expect(session.runTurn({ turn: turnId('quota-turn'), prompt: 'go', permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'failed', text: 'abcde', error: 'quota exceeded' })
     await session.dispose()
   })
+
+it('keeps the account status when the caller cancels a session open', async () => {
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => fixtureLaunchSpec() })
+    try {
+      await expect(provider.listModels()).resolves.toBeInstanceOf(Array)
+      expect(provider.health.status).toBe('ready')
+      const controller = new AbortController()
+      const opening = provider.openSession({ route: route(), session: sessionId('cancelled-open'), permissionMode: 'approval-required', signal: controller.signal })
+      setTimeout(() => controller.abort(), 0)
+      await expect(opening).rejects.toMatchObject({ name: 'AbortError' })
+      expect(provider.health.status).toBe('ready')
+      expect(provider.health.message).toBeUndefined()
+    } finally { await provider.dispose() }
+  }, 30_000)
+
+  it('still records the discovery deadline this provider owns when it expires', async () => {
+    const provider = new AntigravityProvider({ ...config(), modelDiscoveryTimeoutMs: 1, cancelGraceMs: 50 }, { cwd: '/workspace', launchSpec: async () => fixtureLaunchSpec() })
+    try {
+      await expect(provider.listModels()).rejects.toMatchObject({ name: 'AbortError' })
+      expect(provider.health).toMatchObject({ status: 'error', message: 'The operation was aborted' })
+    } finally { await provider.dispose() }
+  }, 30_000)
+
+  it('reports the cancelled-open status the Settings row maps to sign-in', async () => {
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => fixtureLaunchSpec() })
+    try {
+      await provider.listModels()
+      const controller = new AbortController()
+      const opening = provider.openSession({ route: route(), session: sessionId('cancelled-open-row'), permissionMode: 'approval-required', signal: controller.signal })
+      setTimeout(() => controller.abort(), 0)
+      await expect(opening).rejects.toMatchObject({ name: 'AbortError' })
+      expect(createAntigravitySettingsEditor(config(), provider).snapshot().status).toMatchObject({ authenticated: true, ready: true })
+    } finally { await provider.dispose() }
+  }, 30_000)
 
   it('reports protocol validation failures through provider health', async () => {
     const provider = new AntigravityProvider(config(), { installationProbe: { stat: async () => ({ isFile: true, mode: 0o755 }) }, launchSpec: async () => launchSpec(), connectionFactory: () => new FakeConnection({ initializeResponse: { protocolVersion: 1, agentInfo: { name: 'antigravity-acp' }, agentCapabilities: {} } }) })

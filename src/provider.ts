@@ -78,7 +78,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), model: this.config.model ?? ANTIGRAVITY_DEFAULT_MODEL }
       return models
     } catch (error) {
-      this.setFailureStatus(error)
+      this.setFailureStatus(error, signal)
       throw error
     } finally {
       await this.closeConnection(connection)
@@ -122,7 +122,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       return trackedSession
     } catch (error) {
       await this.closeConnection(connection)
-      this.setFailureStatus(error)
+      this.setFailureStatus(error, request.signal)
       throw error
     }
   }
@@ -140,8 +140,18 @@ export class AntigravityProvider implements ExternalAgentProvider {
     return this.disposePromise
   }
 
-  private setFailureStatus(error: unknown): void {
+  /** Record a failure the provider observed, unless the caller cancelled the operation that produced it.
+   *
+   * A caller that cancelled never disproved the account or the installation, so the status
+   * left behind is still the best answer: pressing Stop must not read as "sign-in required".
+   * Only the caller's own signal suppresses the write. The discovery deadline this provider
+   * arms is not a cancellation, so a discovery that really times out still records a failure.
+   * @param error the failure being reported.
+   * @param cancelled the caller's signal for the cancelled operation; absent when it owns none.
+   */
+  private setFailureStatus(error: unknown, cancelled?: AbortSignal): void {
     if (this.disposed) return
+    if (cancelled?.aborted === true) return
     const authenticationRequired = isAuthenticationError(error)
     this.status = { status: authenticationRequired ? 'authentication-required' : 'error', profileDirectory: this.profileDirectory, message: authenticationRequired ? antigravitySignInRequiredMessage() : redactAntigravityText(errorMessage(error)) }
   }
@@ -190,7 +200,7 @@ export class AntigravityProvider implements ExternalAgentProvider {
       this.assertActive()
       this.status = { status: 'ready', profileDirectory: this.profileDirectory, ...(this.identity?.agentVersion === undefined ? {} : { version: this.identity.agentVersion }), ...(this.status.model === undefined ? {} : { model: this.status.model }) }
     } catch (error) {
-      this.setFailureStatus(error)
+      this.setFailureStatus(error, signal)
       throw error
     } finally {
       await this.closeConnection(connection)
