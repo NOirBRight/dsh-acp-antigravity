@@ -309,7 +309,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
     setPicker(false)
     setCatalogOpen(true)
   }
-  const loginActive = state !== 'missing' && !row.authenticated
+  const loginActive = state === 'login'
   const loginUrl = row.authAttempt?.authorizationUrl ?? row.authorizationUrl
   return <>
     {showInstall && <section style={section}>
@@ -323,7 +323,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
     </section>}
     <section style={section} className="compact">
       <div style={{ ...actions, justifyContent: 'space-between' }}>
-        <div><h3 data-antigravity-heading>{t('account')}</h3><p style={muted}>{row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : t('authBadge')}</p></div>
+        <div><h3 data-antigravity-heading>{t('account')}</h3><p style={muted}>{row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : t('authBadge')}</p></div>
         {row.authenticated
           ? <span style={{ display: 'inline-flex', gap: 8 }}>
             <button type="button" style={iconButtonStyle} aria-label={t('rescan')} title={t('rescan')} disabled={working || polling} onClick={onRefresh}><IconRefresh /></button>
@@ -335,6 +335,10 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
       {menu && row.authenticated && <div style={actions}>
         <button type="button" style={button} onClick={() => setConfirm('switch')}>{t('switchAccount')}</button>
         <button type="button" style={button} onClick={() => setConfirm('logout')}>{t('signOut')}</button>
+      </div>}
+      {state === 'error' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <p role="alert" style={errorStyle}>{row.message ?? t('errorBadge')}</p>
+        <div style={actions}><button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button></div>
       </div>}
       {loginActive && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <p style={muted}>{t(antigravityAccessHintKey(kind))}</p>
@@ -572,7 +576,7 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: 
   }
   const row = draft
   const state = resolveAntigravityCardState(row)
-  const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'login' ? t('authBadge') : t('connected')
+  const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : state === 'login' ? t('authBadge') : t('connected')
   const first = quota?.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
   const resetDetail = first?.bucket.resetTime === undefined ? undefined : t('resetsAt') + ' ' + new Date(first.bucket.resetTime).toLocaleString()
   const liveQuota = first === undefined ? undefined : { remainingPercent: first.bucket.remainingFraction! >= 1 ? 100 : Math.min(99, Math.round(first.bucket.remainingFraction! * 100)), label: [first.group, first.bucket.window ?? first.bucket.displayName].filter(Boolean).join(' · '), ...(quotaError === undefined ? (resetDetail === undefined ? {} : { detail: resetDetail }) : { detail: t('staleQuota') }) }

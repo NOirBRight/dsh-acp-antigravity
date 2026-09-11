@@ -2,7 +2,7 @@
 import type { AcpCatalogModel, AcpSettingsRow } from '../client-contract.ts'
 
 /** Visible installation and account setup step. */
-export type AntigravityCardState = 'loading' | 'missing' | 'login' | 'connected'
+export type AntigravityCardState = 'loading' | 'missing' | 'login' | 'error' | 'connected'
 
 /** How this Settings page is being reached. Google loopback only auto-completes on `local`. */
 export type AntigravityAccessKind = 'local' | 'lan' | 'remote' | 'app'
@@ -29,10 +29,11 @@ export function antigravityAccessHintKey(kind: AntigravityAccessKind): 'accessLo
   return 'accessRemote'
 }
 
-/** Resolve setup from probe-backed installation and provider authentication status. */
+/** Resolve setup from probe-backed installation and provider authentication status. A failed probe reports the failure it saw instead of claiming the account needs sign-in. */
 export function resolveAntigravityCardState(row: AcpSettingsRow | undefined): AntigravityCardState {
   if (row === undefined) return 'loading'
   if (!row.installed) return 'missing'
+  if (row.probeFailed === true) return 'error'
   if (!row.authenticated) return 'login'
   return 'connected'
 }

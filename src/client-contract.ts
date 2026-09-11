@@ -65,6 +65,8 @@ export interface AcpSettingsRow {
   readonly authenticated: boolean
   readonly live: boolean
   readonly ready: boolean
+  /** Set when the last probe, initialization, or session start failed for a reason the host does not attribute to the account, so the row is not a sign-in state. */
+  readonly probeFailed?: boolean
   readonly message?: string
   readonly version?: string
   readonly profileDirectory?: string
@@ -179,6 +181,7 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
       authenticated: row.authenticated,
       live: row.live,
       ready: row.ready,
+      ...(row.probeFailed === true ? { probeFailed: true } : {}),
       ...(typeof row.message === 'string' ? { message: row.message } : {}),
       ...(typeof row.version === 'string' ? { version: row.version } : {}),
       ...(typeof row.profileDirectory === 'string' ? { profileDirectory: row.profileDirectory } : {}),

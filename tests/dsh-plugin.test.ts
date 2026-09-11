@@ -126,6 +126,36 @@ describe('DSH settings plugin', () => {
     expect(snapshot?.rows[0]?.executablePath).toBe(server)
   })
 
+  it('reports a failed probe as a connection failure rather than a sign-in state', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-probe-failed-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-acp-bin-'))
+    homes.push(dir)
+    const { writeFile, chmod } = await import('node:fs/promises')
+    const server = join(dir, 'agy_acp_server.par')
+    const harness = join(dir, 'localharness_external')
+    // Both executables pass the inspection probe, then the native runtime exits before ACP initialize.
+    await writeFile(server, '#!/bin/sh\nexit 1\n')
+    await writeFile(harness, '#!/bin/sh\nexit 1\n')
+    await chmod(server, 0o755)
+    await chmod(harness, 0o755)
+    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const ctx = {
+      on: () => () => {},
+      effect: (fn: () => unknown) => fn(),
+      inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection }),
+      connection,
+    }
+    await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
+    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const validated = await handler(RUN_ENDPOINT, { action: 'validate-installation' }) as { ok: boolean }
+    expect(validated.ok).toBe(false)
+    const result = await handler(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
+    expect(decodeSnapshot(result.value)?.rows[0]).toMatchObject({ installed: true, authenticated: false, ready: false, probeFailed: true })
+  })
+
   it('routes native approval through the exact session agent without a Core call id', async () => {
     const seen: Record<string, unknown>[] = []
     const agent = { session: { id: 'session-1' } }

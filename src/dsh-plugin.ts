@@ -237,6 +237,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts, declaredDefaultModelId), live.catalogOrder, live.catalogOverrides),
       ...(declaredDefaultModelId === undefined ? {} : { declaredDefaultModelId }),
       installed: !('status' in await validateAntigravityInstallation(toProviderConfig(live))),
+      ...(health?.status === 'error' ? { probeFailed: true } : {}),
       authenticated: editor?.status.authenticated ?? health?.status === 'ready',
       live: editor?.status.live ?? false,
       ready: editor?.status.ready ?? health?.status === 'ready',

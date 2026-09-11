@@ -52,6 +52,8 @@ describe('client plugin composition', () => {
     await face.save({ ...loaded!.rows[0]!, enabled: false })
     expect(rpcCall).toHaveBeenLastCalledWith(expect.any(String), 'save', expect.objectContaining({ enabled: false, modelDiscoveryTimeoutMs: 45_000 }), undefined)
     expect(decodeSnapshot({ title: 'External Agents', rows: [{ ...row, modelDiscoveryTimeoutMs: 0 }] })).toBeUndefined()
+    expect(decodeSnapshot({ title: 'External Agents', rows: [{ ...row, probeFailed: true }] })?.rows[0]?.probeFailed).toBe(true)
+    expect(decodeSnapshot({ title: 'External Agents', rows: [row] })?.rows[0]?.probeFailed).toBeUndefined()
   })
 
   it('keeps native activity out of the conversation tab list', () => {

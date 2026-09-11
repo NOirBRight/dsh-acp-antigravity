@@ -71,10 +71,12 @@ describe('antigravity settings card states', () => {
     expect(markup).not.toMatch(/[0-9]+ models/)
   })
 
-  it('derives missing, login, and connected only from installed and authenticated', () => {
+  it('derives missing, login, error, and connected from installed, authenticated, and a failed probe', () => {
     expect(resolveAntigravityCardState(undefined)).toBe('loading')
     expect(resolveAntigravityCardState(baseRow)).toBe('missing')
     expect(resolveAntigravityCardState({ ...baseRow, installed: true })).toBe('login')
+    expect(resolveAntigravityCardState({ ...baseRow, installed: true, probeFailed: true })).toBe('error')
+    expect(resolveAntigravityCardState({ ...baseRow, installed: true, probeFailed: true, message: 'Antigravity ACP exited before initialize.' })).toBe('error')
     expect(resolveAntigravityCardState({ ...baseRow, installed: true, authenticated: true })).toBe('connected')
     expect(resolveAntigravityCardState({ ...baseRow, installed: true, authenticated: true, enabled: false })).toBe('connected')
   })
@@ -104,10 +106,24 @@ describe('antigravity settings card states', () => {
     expect(markup).toContain('Downloading the Google ACP runtime.')
   })
 
+  it('reports a failed probe as a connection failure, never as a sign-in state', () => {
+    const row = { ...baseRow, installed: true, probeFailed: true, message: 'Antigravity ACP exited before initialize.' }
+    const markup = renderBody(row, snapshotFor(row))
+    expect(markup).toContain(en.errorBadge)
+    expect(markup).not.toContain(en.authBadge)
+    expect(markup).not.toContain(en.openLogin)
+    expect(markup).not.toContain(en.pasteCallback)
+    expect(markup).not.toContain(en.loginWaiting)
+    expect(markup).toContain('Antigravity ACP exited before initialize.')
+    expect(markup).toContain(en.rescan)
+  })
+
   it('puts login at the top once installed and offers the authorization URL recovery', () => {
     const row = { ...baseRow, installed: true, authorizationUrl: 'https://accounts.example/login' }
     const markup = renderBody(row, snapshotFor(row))
     expect(markup).toContain(en.signIn)
+    expect(markup).toContain(en.authBadge)
+    expect(markup).not.toContain(en.errorBadge)
     expect(markup).not.toContain(en.rescan)
     expect(markup).toContain(en.openLogin)
     expect(markup).toContain('https://accounts.example/login')

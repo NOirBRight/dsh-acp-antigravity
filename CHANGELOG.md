@@ -15,6 +15,7 @@
 - The missing-providers-page warning waits out a 15s grace period, so a page load that registers the settings section after mount no longer reports a missing owner; a genuine absence still warns once.
 - Native tool rows render through the plugin-owned read-only card; the private host GenericToolCard import and the unofficial ui-tool native.1 build (scripts/build-ui-tool.mjs, dsh-ui-tool-native-card.patch) are removed. No official ui-tool package is modified and no core patch is carried.
 - Host stream usage chunks carry official TokenUsage keys only: plugin-owned completeness (usageComplete) stays in sidecar telemetry and snapshots, never in host chunks or the session log.
+- A failed probe, initialization, or session start is reported as its own "Connection failed" card state with the host message and a refresh action, instead of claiming the account needs sign-in; a genuinely signed-out account still shows "Sign-in required".
 - DSH peer/dev declarations target 0.1.5-rc.1 only.
 
 ## [0.1.4] - 2026-09-10
