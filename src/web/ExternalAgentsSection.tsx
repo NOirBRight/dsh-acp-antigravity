@@ -750,8 +750,7 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
   const headerQuota = snapshot !== undefined && !snapshot.rows[0]?.authenticated ? undefined : liveQuota ?? headerQuotaFromCache(peekCachedUsage('antigravity'))
   // Migrated detail: the shared template owns the layout, so skip the legacy header toggle.
   if (slot.mode === 'detail' && row && snapshot) {
-    return <section data-provider-card="antigravity" data-provider-role="agent">
-      <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
+    return <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
         mode="detail"
         {...(slot.copy === undefined ? {} : { detailCopy: slot.copy })}
         {...(slot.template === undefined ? {} : { sharedTemplate: slot.template })}
@@ -764,7 +763,6 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
         onCatalogChange={models => change({ ...row, models })}
         onPersist={() => void persist()}
         onDiscard={() => { dirtyRef.current = false; setDirty(false); setDraft(snapshot.rows[0]) }} />
-    </section>
   }
   return <section data-provider-card="antigravity" data-provider-role="agent">
     <style>{providerUiCss + localCss}</style>
