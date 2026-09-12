@@ -22,16 +22,6 @@ export interface AcpSettingsFace {
   quota: (signal?: AbortSignal) => Promise<AntigravityQuotaSnapshot>
 }
 /** Runtime props for the provider card slot. */
-/** Last model count the rendered card published; lets the shared page skip DOM probing. */
-let lastModelCount: number | undefined
-
-/**
- * Read the model count the provider card last rendered.
- * @returns active model count, or undefined before the first snapshot.
- */
-export function antigravityModelCount(): number | undefined {
-  return lastModelCount
-}
 
 export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'>
   & InjectFace<AcpSettingsFace>
@@ -671,6 +661,8 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
     setDraft(current => mergeSettingsDraft(current, incoming, dirtyRef.current))
   }
   const fetchQuota = async (): Promise<void> => {
+    // The settings page owns quota in the shared detail; the card self-loads only in the legacy layout.
+    if (slot.mode === 'detail') return
     quotaAbort.current?.abort()
     const controller = new AbortController(), request = ++quotaEpoch.current
     quotaAbort.current = controller
@@ -750,7 +742,6 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
     finally { if (mounted.current) setSaving(false) }
   }
   const row = draft
-  lastModelCount = row?.models.length
   const state = resolveAntigravityCardState(row)
   const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : state === 'login' ? t('authBadge') : t('connected')
   const first = quota?.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
@@ -760,7 +751,6 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
   // Migrated detail: the shared template owns the layout, so skip the legacy header toggle.
   if (slot.mode === 'detail' && row && snapshot) {
     return <section data-provider-card="antigravity" data-provider-role="agent">
-      <style>{providerUiCss + localCss}</style>
       <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
         mode="detail"
         {...(slot.copy === undefined ? {} : { detailCopy: slot.copy })}

@@ -24,7 +24,6 @@ import { nativeTurnDefinition } from './native-turn.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
-import { antigravityModelCount } from './ExternalAgentsSection.tsx'
 import { catalogOverrideFlags, shouldClearQuota } from './settings-state.ts'
 import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
 
@@ -45,7 +44,7 @@ export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 /** Grace period for dsh-llm-providers-ui to register the providers settings section. */
 const MISSING_OWNER_GRACE_MS = 15_000
 
-function installProviderDirectory(ctx: ClientContext): void {
+function installProviderDirectory(ctx: ClientContext, modelCount: () => number | undefined): void {
   ctx.inject(['providerDirectory'], scope => {
     const directory = scope.providerDirectory
     scope.effect(() => directory.register({
@@ -56,19 +55,20 @@ function installProviderDirectory(ctx: ClientContext): void {
       // The card renders the shared detail template; the settings page adds only the breadcrumb.
       detail: 'shared',
       usage: createAntigravityUsageReader(),
-      modelCount: antigravityModelCount,
+      modelCount,
     }), 'dsh-acp-antigravity: provider directory registration')
   })
 }
 
 export function apply(ctx: ClientContext): void {
-  installProviderDirectory(ctx)
   const localeNamespace = 'settings.external-agents'
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'dsh-acp-antigravity: Settings page copy')
   const t = ctx.locale.bind(localeNamespace) as AcpSettingsFace['t']
   const { rpc } = ctx.connection
   const invalidateUsage = (): void => { dropPersistedUsageKeys(['antigravity']); ctx.get('providerDirectory')?.invalidateUsage('antigravity') }
   let acceptedRow: AcpSettingsRow | undefined
+  // Registered after the accepted row exists so the published count reads live state.
+  installProviderDirectory(ctx, () => acceptedRow?.models.length)
   const load: AcpSettingsFace['load'] = async () => {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
