@@ -335,14 +335,19 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
   const loginUrl = row.authAttempt?.authorizationUrl ?? row.authorizationUrl
   // Prototype C pieces, shared by the legacy body and the migrated detail.
   const installBlock = (
-    <section style={section}>      <h3 data-antigravity-heading>{t('install')}</h3>
-      <p style={muted}>{row.message ?? t('missingBadge')}</p>
-      {snapshot.install && phase !== 'idle' && <p role="status" style={muted}>{snapshot.install.message}{snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}</p>}
-      <div style={actions}>
+    <div className="c-control">
+      <p style={{ ...muted, margin: 0 }}>{row.message ?? t('missingBadge')}</p>
+      {snapshot.install && phase !== 'idle' ? (
+        <p role="status" className="c-field-hint" style={{ paddingLeft: 0 }}>
+          {snapshot.install.message}
+          {snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}
+        </p>
+      ) : null}
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
         <button type="button" style={button} disabled={working || polling} onClick={() => onAction('install-runtime')}>{polling ? t('installing') : t('install')}</button>
         <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>
       </div>
-    </section>
+    </div>
   )
   const accountActions = (
       <div style={{ ...actions, justifyContent: 'space-between' }}>
