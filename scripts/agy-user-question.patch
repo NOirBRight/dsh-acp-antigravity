@@ -1,0 +1,197 @@
+# OPT-IN patch: ACP question freeform via flat _meta, not permission option IDs.
+#
+# Target (pinned): agy_acp_server_20260818_01_RC01
+#   google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py
+#   google3/cloud/developer_experience/antigravity_extensions/acp_server/hooks.py
+# Question requests (dummy interaction_ toolCallId) advertise
+# _meta["agy.supportsFreeform"]=true. A freeform Other answer is
+# outcome cancelled plus _meta["agy.freeformResponse"]=text: no fabricated
+# optionId. Native reads that metadata before the cancelled branch and
+# returns google.antigravity.types.QuestionResponse (selected_option_ids
+# for a real choice, freeform_response for Other, None for genuine
+# cancel). Ordinary session/request_permission tool prompts are unchanged.
+# hooks.py must change: the same ask callback serves questions and
+# workspace-trust, and ExternalOnInteractionHook previously wrapped a
+# string into selected_option_ids only. Archive builds must regenerate
+# matching checked-hash Python 3.14 bytecode for both files as
+# build-agy-usage-runtime.py describes.
+--- server.py
++++ server.py
+@@ -3944,7 +3944,7 @@
+       )
+     async def ask_user_callback(
+         title: str, options: Sequence[sdk_types_module.AskQuestionOption]
+-    ) -> str | None:
++    ) -> sdk_types_module.QuestionResponse | None:
+       return await self._ask_user_handler(
+           session_id=session_id, title=title, options=options
+       )
+@@ -4588,13 +4588,27 @@
+           exc_info=True,
+       )
+ 
++  def _agy_question_freeform(self, response):
++    """Read _meta['agy.freeformResponse'] before any cancelled-outcome branch."""
++    meta = getattr(response, "field_meta", None)
++    if meta is None:
++      return None
++    if not isinstance(meta, dict):
++      raise ValueError("Antigravity question metadata is malformed")
++    if "agy.freeformResponse" not in meta:
++      return None
++    value = meta["agy.freeformResponse"]
++    if not isinstance(value, str):
++      raise ValueError("Antigravity question freeform metadata is malformed")
++    return value
++
+   async def _ask_user_handler(
+       self,
+       *,
+       session_id: str,
+       title: str,
+       options: Sequence[sdk_types_module.AskQuestionOption],
+-  ) -> str | None:
++  ) -> sdk_types_module.QuestionResponse | None:
+     """Prompt the user with a question and multiple choice options.
+ 
+     Args:
+@@ -4603,7 +4617,8 @@
+       options: A sequence of options presented to the user.
+ 
+     Returns:
+-      The selected option ID, or None if the interaction was cancelled.
++      A QuestionResponse with selected option IDs or freeform text, or
++      None if the interaction was cancelled.
+     """
+     if not self._client:
+       return None
+@@ -4646,13 +4661,14 @@
+             raw_input={},
+             status="pending",
+         ),
++        **{"agy.supportsFreeform": True},
+     )
+ 
+-    status = (
+-        "completed"
+-        if isinstance(response.outcome, schema.AllowedOutcome)
+-        else "failed"
++    freeform = self._agy_question_freeform(response)
++    answered = freeform is not None or isinstance(
++        response.outcome, schema.AllowedOutcome
+     )
++    status = "completed" if answered else "failed"
+     await self._client.session_update(
+         session_id=session_id,
+         update=schema.ToolCallProgress(
+@@ -4667,10 +4683,12 @@
+         ),
+     )
+ 
++    if freeform is not None:
++      return sdk_types_module.QuestionResponse(freeform_response=freeform)
+     if isinstance(response.outcome, schema.AllowedOutcome):
+-      return response.outcome.option_id
+-    elif isinstance(response.outcome, schema.DeniedOutcome):
+-      return getattr(response.outcome, "option_id", None)
++      return sdk_types_module.QuestionResponse(
++          selected_option_ids=[response.outcome.option_id]
++      )
+     return None
+ 
+   async def prompt(  # pyrefly: ignore[bad-override]
+--- hooks.py
++++ hooks.py
+@@ -366,7 +366,7 @@
+     ask_user_fn: (
+         Callable[
+             [str, Sequence[types.AskQuestionOption]],
+-            Awaitable[str | None],
++            Awaitable[types.QuestionResponse | None],
+         ]
+         | None
+     ) = None,
+@@ -398,7 +398,12 @@
+           "Do you trust the authors of this workspace to execute automated"
+           " agent hooks?"
+       )
+-      selected = await ask_user_fn(title, options)
++      answer = await ask_user_fn(title, options)
++      selected = None
++      if answer is not None:
++        ids = answer.selected_option_ids or []
++        if ids:
++          selected = ids[0]
+       if selected and selected.lower() in (
+           "trust",
+           "allow",
+@@ -444,7 +449,7 @@
+       ask_user_fn: (
+           Callable[
+               [str, Sequence[types.AskQuestionOption]],
+-              Awaitable[str | None],
++              Awaitable[types.QuestionResponse | None],
+           ]
+           | None
+       ) = None,
+@@ -585,7 +590,7 @@
+       artifact_dir_path: str | None = None,
+       ask_user_fn: Callable[
+           [str, Sequence[types.AskQuestionOption]],
+-          Awaitable[str | None],
++          Awaitable[types.QuestionResponse | None],
+       ]
+       | None = None,
+   ):
+@@ -674,7 +679,7 @@
+       artifact_dir_path: str | None = None,
+       ask_user_fn: Callable[
+           [str, Sequence[types.AskQuestionOption]],
+-          Awaitable[str | None],
++          Awaitable[types.QuestionResponse | None],
+       ]
+       | None = None,
+   ):
+@@ -792,7 +797,7 @@
+       artifact_dir_path: str | None = None,
+       ask_user_fn: Callable[
+           [str, Sequence[types.AskQuestionOption]],
+-          Awaitable[str | None],
++          Awaitable[types.QuestionResponse | None],
+       ]
+       | None = None,
+   ):
+@@ -965,14 +970,14 @@
+       self,
+       ask_user_fn: Callable[
+           [str, Sequence[types.AskQuestionOption]],
+-          Awaitable[str | None],
++          Awaitable[types.QuestionResponse | None],
+       ],
+   ):
+     """Initializes the instance.
+ 
+     Args:
+       ask_user_fn: A callback function that takes a title and a sequence of
+-        options and returns the selected option ID, or None if cancelled.
++        options and returns a QuestionResponse, or None if cancelled.
+     """
+     super().__init__()
+     self._ask_user_fn = ask_user_fn
+@@ -994,13 +999,10 @@
+     """
+     responses = []
+     for q in data.questions:
+-      selected_id = await self._ask_user_fn(q.question, q.options)
++      answer = await self._ask_user_fn(q.question, q.options)
+ 
+-      if selected_id is None:
++      if answer is None:
+         return types.QuestionHookResult(responses=responses, cancelled=True)
+-
+-      responses.append(
+-          types.QuestionResponse(selected_option_ids=[selected_id])
+-      )
++      responses.append(answer)
+ 
+     return types.QuestionHookResult(responses=responses)
