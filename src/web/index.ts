@@ -24,6 +24,7 @@ import { nativeTurnDefinition } from './native-turn.ts'
 import { ExternalAgentsSection, type AcpSettingsFace } from './ExternalAgentsSection.tsx'
 import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
+import { antigravityModelCount } from './ExternalAgentsSection.tsx'
 import { catalogOverrideFlags, shouldClearQuota } from './settings-state.ts'
 import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
 
@@ -47,7 +48,16 @@ const MISSING_OWNER_GRACE_MS = 15_000
 function installProviderDirectory(ctx: ClientContext): void {
   ctx.inject(['providerDirectory'], scope => {
     const directory = scope.providerDirectory
-    scope.effect(() => directory.register({ key: 'antigravity', role: 'agent', header: 'shared', usage: createAntigravityUsageReader() }), 'dsh-acp-antigravity: provider directory registration')
+    scope.effect(() => directory.register({
+      key: 'antigravity',
+      name: 'Antigravity',
+      role: 'agent',
+      header: 'shared',
+      // The card renders the shared detail template; the settings page adds only the breadcrumb.
+      detail: 'shared',
+      usage: createAntigravityUsageReader(),
+      modelCount: antigravityModelCount,
+    }), 'dsh-acp-antigravity: provider directory registration')
   })
 }
 

@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AcpSettingsRow, AcpSettingsSnapshot, AntigravityQuotaSnapshot } from '../src/client-contract.ts'
+import { providerDetailCopy } from 'dsh-llm-providers-ui/provider-detail'
 import { AntigravityCardBody, ExternalAgentsSection, type AcpSettingsFace } from '../src/web/ExternalAgentsSection.tsx'
 import { en, type AcpSettingsKey } from '../src/web/locales.ts'
 import { resolveAntigravityCardState } from '../src/web/settings-state.ts'
@@ -188,5 +189,29 @@ describe('antigravity settings card states', () => {
     expect(markup).not.toContain(en.declaredDefault)
     expect(markup).not.toContain(en.enableProvider)
     expect(markup).not.toContain(en.followNative)
+  })
+  it('renders the shared detail template for the Agent detail page', () => {
+    const markup = renderBody(baseRow, snapshotFor(baseRow), {
+      mode: 'detail',
+      detailCopy: providerDetailCopy.en,
+      sharedUsage: {
+        status: 'ready',
+        fetchedAt: '2026-09-12T00:00:00.000Z',
+        windows: [
+          { id: 'session', label: 'Session', shortLabel: 'S', remainingPercent: 74, valueText: '74%' },
+          { id: 'weekly', label: 'Week', shortLabel: 'W', remainingPercent: 31, valueText: '31%' },
+        ],
+      },
+      onSharedQuotaRefresh: () => undefined,
+    })
+
+    expect(markup).toContain('data-provider-detail')
+    expect(markup).toContain('74%')
+    expect(markup).toContain('31%')
+    // The runtime install block folds into advanced settings.
+    expect(markup).toContain('c-advanced')
+    expect(markup).not.toContain('<details class="c-advanced" open')
+    // The legacy card body is not used on the shared detail page.
+    expect(markup).not.toContain('data-antigravity-quota')
   })
 })

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState, type CSSProperties, type JSX, type 
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ModelCatalogEditor, ModelPickerDialog, applyCatalogPatch, type CatalogPatch, type ModelCatalogDraft, type ModelPickerSection } from 'dsh-llm-providers-ui/model-catalog'
 import { ProviderCardHeader, ProviderQuotaMeter, providerUiCss } from 'dsh-llm-providers-ui/provider-ui'
+import { ProviderDetail, providerDetailCopy, type ProviderDetailCopy, type ProviderItemSlotContext } from 'dsh-llm-providers-ui/provider-detail'
 import { dropPersistedUsageKeys, headerQuotaFromCache, peekCachedUsage, rememberHeadlineQuota } from 'dsh-llm-providers-ui/usage-readers'
 import { decodeCatalogModels, type AcpCatalogModel, type AcpSettingsRow, type AcpSettingsSnapshot, type AntigravityQuotaSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
@@ -21,7 +22,21 @@ export interface AcpSettingsFace {
   quota: (signal?: AbortSignal) => Promise<AntigravityQuotaSnapshot>
 }
 /** Runtime props for the provider card slot. */
-export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'> & InjectFace<AcpSettingsFace>
+/** Last model count the rendered card published; lets the shared page skip DOM probing. */
+let lastModelCount: number | undefined
+
+/**
+ * Read the model count the provider card last rendered.
+ * @returns active model count, or undefined before the first snapshot.
+ */
+export function antigravityModelCount(): number | undefined {
+  return lastModelCount
+}
+
+export type ExternalAgentsSectionProps = PropsRuntime<'settings.provider.item'>
+  & InjectFace<AcpSettingsFace>
+  // Present only on the shared settings page; an older host renders the legacy card.
+  & Partial<ProviderItemSlotContext>
 /** Pure state-driven card body: sections order follows missing, login, connected. */
 export interface AntigravityCardBodyProps {
   readonly t: (key: AcpSettingsKey) => string
@@ -43,6 +58,11 @@ export interface AntigravityCardBodyProps {
   readonly onPersist: () => void
   readonly onDiscard: () => void
   readonly accessKind?: AntigravityAccessKind
+  /** Slot context: present only on the shared settings page. */
+  readonly mode?: ProviderItemSlotContext['mode']
+  readonly detailCopy?: ProviderDetailCopy
+  readonly sharedUsage?: ProviderItemSlotContext['usage']
+  readonly onSharedQuotaRefresh?: () => void
 }
 const field: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, minWidth: 0 }
 const control: CSSProperties = { width: '100%', minWidth: 0, minHeight: 36, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 5, padding: '7px 10px', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-1)' }
@@ -164,7 +184,7 @@ function parsePositiveInt(text: string): number | undefined {
  * @param props the live row, snapshot, quota, and state callbacks.
  * @returns the ordered card sections without runtime path internals.
  */
-export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError, quotaLoading, working, polling, saving, dirty, onAction, onRefresh, onRefreshModels, onRefreshQuota, onCatalogChange, onPersist, onDiscard, accessKind }: AntigravityCardBodyProps): JSX.Element {
+export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError, quotaLoading, working, polling, saving, dirty, onAction, onRefresh, onRefreshModels, onRefreshQuota, onCatalogChange, onPersist, onDiscard, accessKind, mode, detailCopy, sharedUsage, onSharedQuotaRefresh }: AntigravityCardBodyProps): JSX.Element {
   const kind = accessKind ?? (typeof window === 'undefined' ? 'remote' : antigravityAccessKind(window.location.hostname, window.navigator.userAgent))
   const phase = snapshot.install?.phase
   const installActive = phase === 'downloading' || phase === 'extracting' || phase === 'verifying'
@@ -311,17 +331,18 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
   }
   const loginActive = state === 'login'
   const loginUrl = row.authAttempt?.authorizationUrl ?? row.authorizationUrl
-  return <>
-    {showInstall && <section style={section}>
-      <h3 data-antigravity-heading>{t('install')}</h3>
+  // Prototype C pieces, shared by the legacy body and the migrated detail.
+  const installBlock = (
+    <section style={section}>      <h3 data-antigravity-heading>{t('install')}</h3>
       <p style={muted}>{row.message ?? t('missingBadge')}</p>
       {snapshot.install && phase !== 'idle' && <p role="status" style={muted}>{snapshot.install.message}{snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}</p>}
       <div style={actions}>
         <button type="button" style={button} disabled={working || polling} onClick={() => onAction('install-runtime')}>{polling ? t('installing') : t('install')}</button>
         <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>
       </div>
-    </section>}
-    <section style={section} className="compact">
+    </section>
+  )
+  const accountActions = (
       <div style={{ ...actions, justifyContent: 'space-between' }}>
         <div><h3 data-antigravity-heading>{t('account')}</h3><p style={muted}>{row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : t('authBadge')}</p></div>
         {row.authenticated
@@ -332,6 +353,9 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
           : state !== 'missing' && !loginActive ? <button type="button" style={button} disabled={working || polling} onClick={() => onAction('sign-in')}>{t('signIn')}</button>
           : null}
       </div>
+  )
+  const accountBody = (
+    <>
       {menu && row.authenticated && <div style={actions}>
         <button type="button" style={button} onClick={() => setConfirm('switch')}>{t('switchAccount')}</button>
         <button type="button" style={button} onClick={() => setConfirm('logout')}>{t('signOut')}</button>
@@ -357,6 +381,108 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
           <button type="button" style={button} onClick={() => { const action = confirm; setConfirm(undefined); setMenu(false); onAction(action === 'switch' ? 'sign-in' : 'sign-out') }}>{t(confirm === 'switch' ? 'switchAccount' : 'signOut')}</button>
         </div>
       </div>}
+    </>
+  )
+  const modelsList = (
+    <>
+            <ModelCatalogEditor
+              items={drafts}
+              fields={{ vision: true, thinking: true, defaultEffort: true, context: true }}
+              labels={{
+                modelId: t('modelId'), modelName: t('modelName'), modelDetails: t('modelDetails'), remove: t('removeModel'),
+                drag: t('dragModel'), moveUp: t('moveUp'), moveDown: t('moveDown'),
+                vision: t('vision'), thinking: t('thinking'), defaultEffort: t('defaultEffort'),
+                contextWindow: t('contextWindow'), contextWindowDefault: t('unknown'),
+                unknown: t('unknown'), supported: t('supported'), unsupported: t('unsupported'),
+                restoreAuto: t('restoreAuto'),
+              }}
+              disabled={saving}
+              sorting={sorting}
+              expanded={expandedModels}
+              onReorder={items => {
+                const byId = new Map(row.models.map(model => [model.id, model]))
+                onCatalogChange(items.map(item => byId.get(item.rowId) ?? byId.get(item.id) ?? { id: item.id, name: item.name ?? item.id }))
+              }}
+              onPatch={(index, patch) => { patchModel(index, patch) }}
+              onRestore={(index, field) => { restoreModelField(index, field) }}
+              onRemove={index => { removeModel(index) }}
+              onToggle={rowId => { toggleModel(rowId) }}
+            />
+            <button
+              type="button"
+              style={{ ...button, alignSelf: 'flex-start' }}
+              disabled={saving}
+              onClick={() => {
+                rowKeySeq.current += 1
+                const rowId = 'agy-model-row-' + String(rowKeySeq.current)
+                pendingRowKeys.current.push(rowId)
+                onCatalogChange([...row.models, { id: '', name: '' }])
+                setExpandedModels(current => new Set(current).add(rowId))
+              }}
+            >
+              {t('addModel')}
+            </button>
+    </>
+  )
+  const draftBlock = (
+    <>
+    {invalidModels ? <p role="alert" style={errorStyle}>{t('invalidModels')}</p> : null}
+    <div style={actionsStyle}>
+      {dirty && <span style={{ ...muted, marginRight: 'auto' }}>{t('unsaved')}</span>}
+      <button type="button" style={button} disabled={!dirty || saving} onClick={onDiscard}>{t('cancel')}</button>
+      <button
+        type="button"
+        style={primaryButtonStyle}
+        disabled={!dirty || invalidModels || saving || working}
+        onClick={onPersist}
+      >
+        {t(saving ? 'saving' : 'save')}
+      </button>
+    </div>
+    </>
+  )
+
+
+  // Prototype C detail: the shared template owns the layout, the agent keeps its own data.
+  if (mode === 'detail') {
+    return (
+      <ProviderDetail
+        name="Antigravity"
+        role="agent"
+        copy={detailCopy ?? providerDetailCopy.en}
+        account={{
+          state: row.authenticated ? 'connected' : 'unconnected',
+          label: row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : t('authBadge'),
+          actions: accountActions,
+          body: accountBody,
+        }}
+        quota={{
+          status: sharedUsage?.status ?? 'loading',
+          windows: sharedUsage?.windows ?? [],
+          ...(onSharedQuotaRefresh === undefined ? {} : { onRefresh: onSharedQuotaRefresh }),
+        }}
+        models={{
+          count: row.models.length,
+          allOpen: catalogOpen,
+          onToggleAll: () => { setCatalogOpen(current => !current) },
+          sorting: sorting,
+          onToggleSorting: () => { setSorting(current => !current) },
+          sortDisabled: saving || row.models.length < 2,
+          onChooseFromAccount: () => { void fetchModels() },
+          chooseDisabled: fetching || saving || !row.authenticated,
+          list: modelsList,
+        }}
+        advanced={installBlock}
+        draft={draftBlock}
+      />
+    )
+  }
+
+  return <>
+    {showInstall && installBlock}
+    <section style={section} className="compact">
+      {accountActions}
+      {accountBody}
     </section>
     {state === 'connected' && <section style={section}>
       <div style={{ ...actions, justifyContent: 'space-between' }}><h3 data-antigravity-heading>{t('quota')}</h3><button type="button" style={button} disabled={!row.authenticated || quotaLoading || working} onClick={onRefreshQuota}>{quotaLoading ? t('loading') : t('refreshQuota')}</button></div>
@@ -401,67 +527,13 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
         </span>
       </div>
       {fetchError === undefined ? null : <p role="status" style={errorStyle}>{fetchError}</p>}
-      {catalogOpen
-        ? (
-          <>
-            <ModelCatalogEditor
-              items={drafts}
-              fields={{ vision: true, thinking: true, defaultEffort: true, context: true }}
-              labels={{
-                modelId: t('modelId'), modelName: t('modelName'), modelDetails: t('modelDetails'), remove: t('removeModel'),
-                drag: t('dragModel'), moveUp: t('moveUp'), moveDown: t('moveDown'),
-                vision: t('vision'), thinking: t('thinking'), defaultEffort: t('defaultEffort'),
-                contextWindow: t('contextWindow'), contextWindowDefault: t('unknown'),
-                unknown: t('unknown'), supported: t('supported'), unsupported: t('unsupported'),
-                restoreAuto: t('restoreAuto'),
-              }}
-              disabled={saving}
-              sorting={sorting}
-              expanded={expandedModels}
-              onReorder={items => {
-                const byId = new Map(row.models.map(model => [model.id, model]))
-                onCatalogChange(items.map(item => byId.get(item.rowId) ?? byId.get(item.id) ?? { id: item.id, name: item.name ?? item.id }))
-              }}
-              onPatch={(index, patch) => { patchModel(index, patch) }}
-              onRestore={(index, field) => { restoreModelField(index, field) }}
-              onRemove={index => { removeModel(index) }}
-              onToggle={rowId => { toggleModel(rowId) }}
-            />
-            <button
-              type="button"
-              style={{ ...button, alignSelf: 'flex-start' }}
-              disabled={saving}
-              onClick={() => {
-                rowKeySeq.current += 1
-                const rowId = 'agy-model-row-' + String(rowKeySeq.current)
-                pendingRowKeys.current.push(rowId)
-                onCatalogChange([...row.models, { id: '', name: '' }])
-                setExpandedModels(current => new Set(current).add(rowId))
-              }}
-            >
-              {t('addModel')}
-            </button>
-          </>
-          )
-        : null}
+      {catalogOpen ? modelsList : null}
       <ModelPickerDialog open={picker} loading={fetching} {...(pickerError === undefined ? {} : { error: pickerError })} labels={{ title: t('pickerTitle'), description: t('pickerDescription'), search: t('pickerSearch'), loading: t('pickerLoading'), empty: t('pickerEmpty'), cancel: t('cancel'), apply: t('applySelected'), close: t('cancel') }}
         sections={pickerSections}
         picked={picked} onClose={() => { setPicker(false); setCandidates(null) }} onToggle={id => setPicked(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next })}
         onApply={adoptModels} />
     </section>}
-    {invalidModels ? <p role="alert" style={errorStyle}>{t('invalidModels')}</p> : null}
-    <div style={actionsStyle}>
-      {dirty && <span style={{ ...muted, marginRight: 'auto' }}>{t('unsaved')}</span>}
-      <button type="button" style={button} disabled={!dirty || saving} onClick={onDiscard}>{t('cancel')}</button>
-      <button
-        type="button"
-        style={primaryButtonStyle}
-        disabled={!dirty || invalidModels || saving || working}
-        onClick={onPersist}
-      >
-        {t(saving ? 'saving' : 'save')}
-      </button>
-    </div>
+    {draftBlock}
   </>
 }
 
@@ -469,7 +541,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
  * @param props the injected Settings face.
  * @returns the collapsible Antigravity provider card.
  */
-export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: ExternalAgentsSectionProps): JSX.Element {
+export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ...slot }: ExternalAgentsSectionProps): JSX.Element {
   const [open, setOpen] = useState(false)
   const [snapshot, setSnapshot] = useState<AcpSettingsSnapshot>()
   const [draft, setDraft] = useState<AcpSettingsRow>()
@@ -575,12 +647,31 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota }: 
     finally { if (mounted.current) setSaving(false) }
   }
   const row = draft
+  lastModelCount = row?.models.length
   const state = resolveAntigravityCardState(row)
   const status = row === undefined ? t('loading') : !row.enabled ? t('disabledBadge') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : state === 'login' ? t('authBadge') : t('connected')
   const first = quota?.groups.flatMap(group => group.buckets.map(bucket => ({ group: group.displayName, bucket }))).find(item => !item.bucket.disabled && item.bucket.remainingFraction !== undefined)
   const resetDetail = first?.bucket.resetTime === undefined ? undefined : t('resetsAt') + ' ' + new Date(first.bucket.resetTime).toLocaleString()
   const liveQuota = first === undefined ? undefined : { remainingPercent: first.bucket.remainingFraction! >= 1 ? 100 : Math.min(99, Math.round(first.bucket.remainingFraction! * 100)), label: [first.group, first.bucket.window ?? first.bucket.displayName].filter(Boolean).join(' · '), ...(quotaError === undefined ? (resetDetail === undefined ? {} : { detail: resetDetail }) : { detail: t('staleQuota') }) }
   const headerQuota = snapshot !== undefined && !snapshot.rows[0]?.authenticated ? undefined : liveQuota ?? headerQuotaFromCache(peekCachedUsage('antigravity'))
+  // Migrated detail: the shared template owns the layout, so skip the legacy header toggle.
+  if (slot.mode === 'detail' && row && snapshot) {
+    return <section data-provider-card="antigravity" data-provider-role="agent">
+      <style>{providerUiCss + localCss}</style>
+      <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
+        mode="detail"
+        {...(slot.copy === undefined ? {} : { detailCopy: slot.copy })}
+        {...(slot.usage === undefined ? {} : { sharedUsage: slot.usage })}
+        {...(slot.onRefresh === undefined ? {} : { onSharedQuotaRefresh: slot.onRefresh })}
+        onAction={(name, value) => void action(name, value)}
+        onRefresh={() => void refresh().catch(fail)}
+        onRefreshModels={refreshModels}
+        onRefreshQuota={() => void fetchQuota()}
+        onCatalogChange={models => change({ ...row, models })}
+        onPersist={() => void persist()}
+        onDiscard={() => { dirtyRef.current = false; setDirty(false); setDraft(snapshot.rows[0]) }} />
+    </section>
+  }
   return <section data-provider-card="antigravity" data-provider-role="agent">
     <style>{providerUiCss + localCss}</style>
     <button type="button" data-provider-card-header aria-expanded={open} onClick={() => setOpen(!open)}>
