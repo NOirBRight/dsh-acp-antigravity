@@ -445,6 +445,65 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
   )
 
 
+  /** Provider-specific fields for one expanded model row; shared by both layouts. */
+  const modelExtra = (model: AcpSettingsRow['models'][number], index: number): ReactNode => {
+    const draft = catalogDraft(model, index)
+    const efforts = model.reasoning?.efforts ?? []
+    return (
+      <div className="c-extra-grid">
+        <label className="c-field">
+          <span className="c-field-label">{t('contextWindow')}</span>
+          <input
+            className="c-input"
+            inputMode="numeric"
+            value={draft.contextWindow ?? ''}
+            disabled={saving}
+            aria-label={t('contextWindow')}
+            onChange={(event) => { patchModel(index, { contextWindow: event.target.value }) }}
+          />
+        </label>
+        <div className="c-extra-checks">
+          <label>
+            <input
+              type="checkbox"
+              checked={model.vision === true}
+              disabled={saving}
+              onChange={(event) => { patchModel(index, { vision: event.target.checked }) }}
+            />
+            {t('vision')}
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={model.thinking === true}
+              disabled={saving}
+              onChange={(event) => { patchModel(index, { thinking: event.target.checked }) }}
+            />
+            {t('thinking')}
+          </label>
+        </div>
+        {efforts.length === 0
+          ? null
+          : (
+            <label className="c-field">
+              <span className="c-field-label">{t('defaultEffort')}</span>
+              <select
+                className="c-input"
+                value={model.reasoning?.defaultEffort ?? ''}
+                disabled={saving}
+                aria-label={t('defaultEffort')}
+                onChange={(event) => { patchModel(index, { defaultEffort: event.target.value }) }}
+              >
+                {efforts.map(effort => (
+                  <option key={effort.id} value={effort.id}>{effort.name ?? effort.id}</option>
+                ))}
+              </select>
+            </label>
+          )}
+      </div>
+    )
+  }
+
   // Prototype C detail: the shared template owns the layout, the agent keeps its own data.
   if (mode === 'detail' && sharedTemplate !== undefined && detailCopy !== undefined) {
     const SharedDetail = sharedTemplate
@@ -452,6 +511,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
       <SharedDetail
         name="Antigravity"
         role="agent"
+        mark={<BrandMark />}
         copy={detailCopy}
         account={{
           state: row.authenticated ? 'connected' : 'unconnected',
@@ -473,7 +533,42 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
           sortDisabled: saving || row.models.length < 2,
           onChooseFromAccount: () => { void fetchModels() },
           chooseDisabled: fetching || saving || !row.authenticated,
-          list: modelsList,
+          items: row.models.map((model, index) => {
+            const draft = catalogDraft(model, index)
+            return {
+              rowId: draft.rowId,
+              id: draft.id,
+              ...(draft.name === undefined ? {} : { name: draft.name }),
+            }
+          }),
+          expanded: [...expandedModels],
+          onPatch: (rowId, patch) => {
+            const index = row.models.findIndex((model, at) => catalogDraft(model, at).rowId === rowId)
+            if (index >= 0) patchModel(index, patch)
+          },
+          onRemove: (rowId) => {
+            const index = row.models.findIndex((model, at) => catalogDraft(model, at).rowId === rowId)
+            if (index >= 0) removeModel(index)
+          },
+          onToggle: (rowId) => { toggleModel(rowId) },
+          onReorder: (rowIds) => {
+            const byId = new Map(row.models.map((model, at) => [catalogDraft(model, at).rowId, model]))
+            const next = rowIds.map(rowId => byId.get(rowId)).filter((model): model is AcpSettingsRow['models'][number] => model !== undefined)
+            if (next.length === row.models.length) onCatalogChange(next)
+          },
+          onAdd: () => {
+            rowKeySeq.current += 1
+            const rowId = 'agy-model-row-' + String(rowKeySeq.current)
+            pendingRowKeys.current.push(rowId)
+            onCatalogChange([...row.models, { id: '', name: '' }])
+            setExpandedModels(current => new Set(current).add(rowId))
+          },
+          addDisabled: saving,
+          extra: (rowItem) => {
+            const index = row.models.findIndex((model, at) => catalogDraft(model, at).rowId === rowItem.rowId)
+            const model = row.models[index]
+            return index < 0 || model === undefined ? null : modelExtra(model, index)
+          },
         }}
         advanced={installBlock}
         draft={draftBlock}
