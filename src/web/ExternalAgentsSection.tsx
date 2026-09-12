@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState, type CSSProperties, type JSX, type 
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ModelCatalogEditor, ModelPickerDialog, applyCatalogPatch, type CatalogPatch, type ModelCatalogDraft, type ModelPickerSection } from 'dsh-llm-providers-ui/model-catalog'
 import { ProviderCardHeader, ProviderQuotaMeter, providerUiCss } from 'dsh-llm-providers-ui/provider-ui'
-import { ProviderDetail, providerDetailCopy, type ProviderDetailCopy, type ProviderItemSlotContext } from 'dsh-llm-providers-ui/provider-detail'
+import type { ProviderDetailCopy, ProviderDetailProps, ProviderItemSlotContext } from 'dsh-llm-providers-ui/provider-detail'
 import { dropPersistedUsageKeys, headerQuotaFromCache, peekCachedUsage, rememberHeadlineQuota } from 'dsh-llm-providers-ui/usage-readers'
 import { decodeCatalogModels, type AcpCatalogModel, type AcpSettingsRow, type AcpSettingsSnapshot, type AntigravityQuotaSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
@@ -61,6 +61,8 @@ export interface AntigravityCardBodyProps {
   /** Slot context: present only on the shared settings page. */
   readonly mode?: ProviderItemSlotContext['mode']
   readonly detailCopy?: ProviderDetailCopy
+  /** Shared detail template handed down by the settings page. */
+  readonly sharedTemplate?: ProviderItemSlotContext['template']
   readonly sharedUsage?: ProviderItemSlotContext['usage']
   readonly onSharedQuotaRefresh?: () => void
 }
@@ -184,7 +186,7 @@ function parsePositiveInt(text: string): number | undefined {
  * @param props the live row, snapshot, quota, and state callbacks.
  * @returns the ordered card sections without runtime path internals.
  */
-export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError, quotaLoading, working, polling, saving, dirty, onAction, onRefresh, onRefreshModels, onRefreshQuota, onCatalogChange, onPersist, onDiscard, accessKind, mode, detailCopy, sharedUsage, onSharedQuotaRefresh }: AntigravityCardBodyProps): JSX.Element {
+export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError, quotaLoading, working, polling, saving, dirty, onAction, onRefresh, onRefreshModels, onRefreshQuota, onCatalogChange, onPersist, onDiscard, accessKind, mode, detailCopy, sharedTemplate, sharedUsage, onSharedQuotaRefresh }: AntigravityCardBodyProps): JSX.Element {
   const kind = accessKind ?? (typeof window === 'undefined' ? 'remote' : antigravityAccessKind(window.location.hostname, window.navigator.userAgent))
   const phase = snapshot.install?.phase
   const installActive = phase === 'downloading' || phase === 'extracting' || phase === 'verifying'
@@ -444,12 +446,13 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
 
 
   // Prototype C detail: the shared template owns the layout, the agent keeps its own data.
-  if (mode === 'detail') {
+  if (mode === 'detail' && sharedTemplate !== undefined && detailCopy !== undefined) {
+    const SharedDetail = sharedTemplate
     return (
-      <ProviderDetail
+      <SharedDetail
         name="Antigravity"
         role="agent"
-        copy={detailCopy ?? providerDetailCopy.en}
+        copy={detailCopy}
         account={{
           state: row.authenticated ? 'connected' : 'unconnected',
           label: row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : t('authBadge'),
@@ -661,6 +664,7 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
       <AntigravityCardBody t={t} row={row} snapshot={snapshot} state={state} {...(quota === undefined ? {} : { quota })} {...(quotaError === undefined ? {} : { quotaError })} quotaLoading={quotaLoading} working={working} polling={polling} saving={saving} dirty={dirty}
         mode="detail"
         {...(slot.copy === undefined ? {} : { detailCopy: slot.copy })}
+        {...(slot.template === undefined ? {} : { sharedTemplate: slot.template })}
         {...(slot.usage === undefined ? {} : { sharedUsage: slot.usage })}
         {...(slot.onRefresh === undefined ? {} : { onSharedQuotaRefresh: slot.onRefresh })}
         onAction={(name, value) => void action(name, value)}

@@ -135,7 +135,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.2/deepseek-ai-dsh-acp-provider-0.1.2.tgz",
     "@agentclientprotocol/sdk": "0.25.1",
-    "dsh-llm-providers-ui": "file:/home/noirbright/.dsh-lab/tmp/dsh-llm-providers-ui-0.1.12-preview.4.tgz"
+    "dsh-llm-providers-ui": "file:/home/noirbright/.dsh-lab/tmp/dsh-llm-providers-ui-0.1.12-preview.9.tgz"
   },
   "devDependencies": {
     "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.12-015rc1d/dsh-llm-providers-ui-0.1.12.tgz",

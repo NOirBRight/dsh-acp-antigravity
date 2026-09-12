@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AcpSettingsRow, AcpSettingsSnapshot, AntigravityQuotaSnapshot } from '../src/client-contract.ts'
-import { providerDetailCopy } from 'dsh-llm-providers-ui/provider-detail'
+import { ProviderDetail, providerDetailCopy } from 'dsh-llm-providers-ui/provider-detail'
 import { AntigravityCardBody, ExternalAgentsSection, type AcpSettingsFace } from '../src/web/ExternalAgentsSection.tsx'
 import { en, type AcpSettingsKey } from '../src/web/locales.ts'
 import { resolveAntigravityCardState } from '../src/web/settings-state.ts'
@@ -194,6 +194,7 @@ describe('antigravity settings card states', () => {
     const markup = renderBody(baseRow, snapshotFor(baseRow), {
       mode: 'detail',
       detailCopy: providerDetailCopy.en,
+      sharedTemplate: ProviderDetail,
       sharedUsage: {
         status: 'ready',
         fetchedAt: '2026-09-12T00:00:00.000Z',
