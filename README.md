@@ -18,10 +18,10 @@ Latest (Owner + Model Switch + ACP provider + this plugin):
 
 ```sh
 dsh plugin --profile web add --force \
-  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui-0.1.12.tgz \
+  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui-0.2.8.tgz \
   https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.2/deepseek-ai-dsh-acp-provider-0.1.2.tgz \
-  https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch-0.4.9.tgz \
-  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-deepseek-ai-dsh-acp-antigravity-0.1.9.tgz
+  https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch-0.4.10.tgz \
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-dsh-acp-antigravity-0.1.9.tgz
 dsh plugin --profile web list
 ```
 
@@ -29,9 +29,9 @@ Fixed versions:
 
 ```sh
 dsh plugin --profile web add --force \
-  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.1.12-015rc1e/dsh-llm-providers-ui-0.1.12.tgz \
+  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.8/dsh-llm-providers-ui-0.2.8.tgz \
   https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.2/deepseek-ai-dsh-acp-provider-0.1.2.tgz \
-  https://github.com/NOirBRight/dsh-model-switch/releases/download/v0.4.9-015rc1b/dsh-model-switch-0.4.9.tgz \
+  https://github.com/NOirBRight/dsh-model-switch/releases/download/v0.4.10/dsh-model-switch-0.4.10.tgz \
   https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.9/deepseek-ai-dsh-acp-antigravity-0.1.9.tgz
 ```
 
