@@ -15,7 +15,7 @@ type EntrySpec = {
 function registrationBench() {
   const entries: Array<{ spec: EntrySpec; component: unknown }> = []
   const definitions: unknown[] = []
-  const registerProvider = vi.fn(() => vi.fn())
+  const registerProvider = vi.fn((_declaration: { account: () => { state: string } }) => vi.fn())
   const invalidateUsage = vi.fn()
   const rpcCall = vi.fn()
   const effect = (register: () => unknown) => register()
@@ -31,7 +31,7 @@ function registrationBench() {
     },
     connection: { rpc: { call: rpcCall } },
     uiConversation: { events: { register: (definition: unknown) => { definitions.push(definition); return vi.fn() } } },
-    get: () => ({ invalidateUsage }),
+    get: () => ({ invalidateUsage, update: () => undefined }),
     inject: (_dependencies: string[], callback: (scope: object) => unknown) => callback({ providerDirectory: { register: registerProvider }, effect }),
     effect,
   }
@@ -90,7 +90,37 @@ describe('client plugin composition', () => {
 
   it('publishes the Antigravity card as an Agent provider', () => {
     const { registerProvider } = registrationBench()
-    expect(registerProvider).toHaveBeenCalledWith(expect.objectContaining({ key: 'antigravity', role: 'agent', header: 'shared', usage: expect.objectContaining({ read: expect.any(Function) }) }))
+    expect(registerProvider).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'antigravity',
+      role: 'agent',
+      header: 'shared',
+      catalogId: 'antigravity',
+      binding: { channel: '/dsh-acp-antigravity', endpoint: 'activity/binding' },
+      usage: expect.objectContaining({ read: expect.any(Function) }),
+    }))
+  })
+
+  it('resolves overview account from the settings snapshot, not quota', async () => {
+    const { entries, registerProvider, rpcCall } = registrationBench()
+    const account = (registerProvider.mock.calls[0]?.[0] as { account: () => { state: string } }).account
+    expect(account()).toEqual({ state: 'unknown' })
+    const face = (entries[0]!.spec.inject as () => { load: () => Promise<unknown>; quota: () => Promise<unknown>; run: (action: string) => Promise<unknown> })()
+    const row = { provider: 'antigravity', instanceId: 'default', title: 'Antigravity', enabled: true, executablePath: '/agy', harnessPath: '/harness', stateDirectory: '/profile', models: [], installed: true, authenticated: true, live: false, ready: true }
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { title: 'External Agents', rows: [row] } })
+    await face.load()
+    expect(account()).toEqual({ state: 'connected' })
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { status: 'error', observedAt: '2026-09-06T03:00:00Z', groups: [] } })
+    await face.quota()
+    expect(account()).toEqual({ state: 'connected' })
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { title: 'External Agents', rows: [{ ...row, authenticated: false }] } })
+    await face.load()
+    expect(account()).toEqual({ state: 'unconnected' })
+    rpcCall.mockResolvedValueOnce({ ok: true, value: { status: 'ready', observedAt: '2026-09-06T03:00:00Z', groups: [] } })
+    await face.quota()
+    expect(account()).toEqual({ state: 'unconnected' })
+    rpcCall.mockResolvedValueOnce({ ok: true, value: {} })
+    await face.run('sign-out')
+    expect(account()).toEqual({ state: 'unconnected' })
   })
 
   it('purges cached sidebar quota on logout and on a structured account-change response', async () => {

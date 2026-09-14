@@ -14,6 +14,8 @@ Verified Hosts in `package.json#dsh.compatibility.dshReleases` are evidence, not
 
 Install every required package in one command. `dsh-acp-provider` is a profile dependency with no bundle of its own; omitting it leaves Antigravity unable to load. Native tool rows render through the plugin-owned read-only card; no unofficial ui-tool build is required. Model Switch owns the composer picker and runtime lock used with Antigravity.
 
+Native `catalogId` / `binding` registration and the unresolved `unknown` account state need a newer `dsh-llm-providers-ui` than published 0.2.8, which drops those fields and treats `unknown` as unconnected.
+
 Latest (Owner + Model Switch + ACP provider + this plugin):
 
 ```sh

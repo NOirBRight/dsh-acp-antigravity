@@ -23,6 +23,7 @@ describe('DSH settings plugin', () => {
     const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
         injected.push(deps)
@@ -54,6 +55,7 @@ describe('DSH settings plugin', () => {
     const injected: string[][] = []
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
         injected.push(deps)
@@ -77,6 +79,7 @@ describe('DSH settings plugin', () => {
     const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
         injected.push(deps)
@@ -112,6 +115,7 @@ describe('DSH settings plugin', () => {
     const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => {
         injected.push(deps)
@@ -145,6 +149,7 @@ describe('DSH settings plugin', () => {
     const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection }),
       connection,
@@ -176,6 +181,7 @@ describe('DSH settings plugin', () => {
     const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
     const ctx = {
       on: () => () => {},
+      logger: { warn() {} },
       effect: (fn: () => unknown) => fn(),
       inject: (deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection }),
       connection,

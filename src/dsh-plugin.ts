@@ -2,6 +2,7 @@
 import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
 import { join } from 'node:path'
+import { allowDshRuntime } from './compatibility.js'
 import type { ActivityBindingHostContext } from './activity-binding.js'
 import { ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, nativeSessionBinding } from './activity-contract.js'
 import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
@@ -38,8 +39,9 @@ export interface DshPluginConfig {
 /** Host context used by the Settings RPC plugin. */
 export interface DshPluginContext extends ActivityBindingHostContext {
   on: ActivityBindingHostContext['on'] & ((event: 'session/disposed', listener: (session: { readonly id: string }) => void | Promise<void>) => () => void)
+  logger: { warn(message: string): void }
   effect(fn: () => unknown, name?: string): void
-  inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void }; connection: DshPluginContext['connection'] }) => void): void
+  inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void }; connection: DshPluginContext['connection']; modelSwitch?: { adapters: { register: (entry: { provider: string; role: 'agent' }) => () => void } } }) => void): void
   get?(name: string): unknown
   connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
 }
@@ -146,6 +148,11 @@ function toProviderConfig(config: AcpAntigravitySettingsConfig) {
 
 /** Mount the Antigravity provider and the External Agents Settings RPC. */
 export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {}): Promise<void> {
+  if (!allowDshRuntime(ctx.logger, 'dsh-acp-antigravity', ['@deepseek-ai/dsh-session'])) return
+  ctx.inject?.(['modelSwitch'], scope => {
+    const runtime = scope.modelSwitch
+    if (runtime !== undefined) scope.effect(() => runtime.adapters.register({ provider: 'antigravity', role: 'agent' }))
+  })
   const home = dshHome()
   const activity = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history'))
   const { installActivityBindingGuard } = await import('./activity-binding.js')

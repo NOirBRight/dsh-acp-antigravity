@@ -26,6 +26,7 @@ import { en, zh, type AcpSettingsKey } from './locales.ts'
 import { createAntigravityUsageReader } from './usage-reader.ts'
 import { catalogOverrideFlags, shouldClearQuota } from './settings-state.ts'
 import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
+import { ACTIVITY_BINDING_ENDPOINT } from '../activity-contract.js'
 
 type ClientContext = Omit<Context, 'connection'> & {
   readonly connection: ConnectionHandle
@@ -44,19 +45,32 @@ export const inject = ['slots', 'locale', 'connection', 'uiConversation']
 /** Grace period for dsh-llm-providers-ui to register the providers settings section. */
 const MISSING_OWNER_GRACE_MS = 15_000
 
-function installProviderDirectory(ctx: ClientContext, modelCount: () => number | undefined): void {
+type ProviderAccountSnapshot = { state: 'connected' | 'configured' | 'unconnected' | 'unknown' }
+
+function installProviderDirectory(
+  ctx: ClientContext,
+  modelCount: () => number | undefined,
+  extras: { account: () => ProviderAccountSnapshot, binding: { channel: string, endpoint: string } },
+): void {
   ctx.inject(['providerDirectory'], scope => {
-    const directory = scope.providerDirectory
-    scope.effect(() => directory.register({
-      key: 'antigravity',
-      name: 'Antigravity',
-      role: 'agent',
-      header: 'shared',
-      // The card renders the shared detail template; the settings page adds only the breadcrumb.
-      detail: 'shared',
-      usage: createAntigravityUsageReader(),
-      modelCount,
-    }), 'dsh-acp-antigravity: provider directory registration')
+    scope.effect(() => {
+      // Published 0.2.8 types omit catalogId/binding and `unknown` account; keep them at runtime.
+      const declaration = Object.assign({
+        key: 'antigravity',
+        name: 'Antigravity',
+        role: 'agent' as const,
+        header: 'shared' as const,
+        // The card renders the shared detail template; the settings page adds only the breadcrumb.
+        detail: 'shared' as const,
+        usage: createAntigravityUsageReader(),
+        modelCount,
+      }, {
+        catalogId: 'antigravity',
+        account: extras.account,
+        binding: extras.binding,
+      })
+      return scope.providerDirectory.register(declaration as Parameters<typeof scope.providerDirectory.register>[0])
+    }, 'dsh-acp-antigravity: provider directory registration')
   })
 }
 
@@ -68,14 +82,26 @@ export function apply(ctx: ClientContext): void {
   const invalidateUsage = (): void => { dropPersistedUsageKeys(['antigravity']); ctx.get('providerDirectory')?.invalidateUsage('antigravity') }
   let acceptedRow: AcpSettingsRow | undefined
   // Registered after the accepted row exists so the published count reads live state.
-  installProviderDirectory(ctx, () => acceptedRow?.models.length)
+  const account = { state: 'unknown' as 'connected' | 'configured' | 'unconnected' | 'unknown' }
+  let closed = false
+  const publishAccount = (state: typeof account.state): void => {
+    if (closed || account.state === state) return
+    account.state = state
+    ctx.get('providerDirectory')?.update?.('antigravity')
+  }
+  installProviderDirectory(ctx, () => acceptedRow?.models.length, {
+    account: () => ({ state: account.state }),
+    binding: { channel: ACP_SETTINGS_RPC_CHANNEL, endpoint: ACTIVITY_BINDING_ENDPOINT },
+  })
   const load: AcpSettingsFace['load'] = async () => {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
     const decoded = decodeSnapshot(result.value)
     if (decoded === undefined) throw new Error(t('failed'))
+    if (closed) return decoded
     if (shouldClearQuota(acceptedRow, decoded.rows[0])) invalidateUsage()
     acceptedRow = decoded.rows[0]
+    if (acceptedRow !== undefined) publishAccount(acceptedRow.authenticated ? 'connected' : 'unconnected')
     return decoded
   }
   const quota: AcpSettingsFace['quota'] = async signal => {
@@ -123,6 +149,7 @@ export function apply(ctx: ClientContext): void {
     const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, RUN_ENDPOINT, { action, ...(value === undefined ? {} : { value }) }, undefined)
     if (!result.ok) throw new Error(result.error.message)
     if (action === 'sign-out' || action === 'sign-in') invalidateUsage()
+    if (action === 'sign-out') publishAccount('unconnected')
     return result.value
   }
   const pick: AcpSettingsFace['pick'] = async () => {
@@ -131,6 +158,10 @@ export function apply(ctx: ClientContext): void {
     const path = (result.value as { path?: string | null }).path
     return path ?? null
   }
+  ctx.effect(() => {
+    void load().catch(() => { /* overview stays unknown until a later card read */ })
+    return () => { closed = true }
+  }, 'dsh-acp-antigravity: account snapshot')
   ctx.slots.inject('settings.provider.item', () => ctx.slots.register({
     name: 'settings.provider.item',
     key: 'antigravity',

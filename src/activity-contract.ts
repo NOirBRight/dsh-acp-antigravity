@@ -1,4 +1,5 @@
 /** Browser-safe activity DTOs, endpoints, and decoders shared by the store and the settings RPC. */
+import * as AcpProvider from '@deepseek-ai/dsh-acp-provider'
 import { providerId, sessionId, type ExternalAgentSessionRef, type ExternalAgentFullAccessAudit } from '@deepseek-ai/dsh-acp-provider'
 import { isRecord, stringValue } from './decode.js'
 import { decodeRequestTelemetry, decodeUsageSnapshots, type NativeRequestTelemetry, type NativeUsageSnapshots } from './request-telemetry.js'
@@ -58,15 +59,33 @@ export interface AntigravityActivityHistory {
  * @returns Its native reference, or undefined for a conversation never opened natively.
  */
 export function nativeSessionBinding(history: AntigravityActivityHistory, id: string): ExternalAgentSessionRef | undefined {
+  const shared = Reflect.get(AcpProvider, 'latestNativeSessionBinding')
+  if (typeof shared === 'function') {
+    try {
+      return (shared as LatestNativeSessionBinding)(history.records, id, ANTIGRAVITY_SESSION_READY, 'antigravity')
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught)
+      const prefix = 'Antigravity activity history is corrupt: '
+      throw corrupt(message.startsWith(prefix) ? message.slice(prefix.length) : message)
+    }
+  }
   for (let index = history.records.length - 1; index >= 0; index--) {
     const record = history.records[index]
     if (record?.type !== ANTIGRAVITY_SESSION_READY) continue
-    const ref = record.data.ref ?? { provider: providerId('antigravity'), session: sessionId(id) }
+    const ref = record.data.ref
+    if (ref === undefined) return { provider: providerId('antigravity'), session: sessionId(id) }
     if (ref.session !== id) throw corrupt('native binding belongs to another DSH session')
     return ref
   }
   return undefined
 }
+
+type LatestNativeSessionBinding = (
+  records: readonly { readonly type: string; readonly data: unknown }[],
+  boundSession: string,
+  readyType: string,
+  fallbackProvider: string,
+) => ExternalAgentSessionRef | undefined
 
 /** Native binding for one session: the provider when a ready record exists, else null. */
 export interface AntigravityActivityBinding {
@@ -162,7 +181,7 @@ function isSessionReadyData(value: unknown): value is AntigravitySessionReadyDat
   if (!isRecord(value) || value.provider !== 'antigravity') return false
   if (value.ref === undefined) return true
   const ref = value.ref
-  if (!isRecord(ref) || stringValue(ref.provider) === undefined || stringValue(ref.session) === undefined || (ref.nativeSession !== undefined && stringValue(ref.nativeSession) === undefined)) return false
+  if (!isRecord(ref) || ref.provider !== value.provider || stringValue(ref.provider) === undefined || stringValue(ref.session) === undefined || (ref.nativeSession !== undefined && stringValue(ref.nativeSession) === undefined)) return false
   const cursor = ref.resumeCursor
   return cursor === undefined || (isRecord(cursor) && cursor.provider === ref.provider && stringValue(cursor.value) !== undefined)
 }

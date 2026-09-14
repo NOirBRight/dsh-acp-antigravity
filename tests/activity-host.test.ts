@@ -18,6 +18,7 @@ it('stores native activity independently without appending any Core session even
   const scope = { effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection: { rpc: { handle: () => () => {} } } }
   const ctx: DshPluginContext = {
     on,
+    logger: { warn() {} },
     effect: scope.effect,
     inject: (_deps, run) => run(scope),
     get: () => ({ get: () => agent, roots: () => [agent] }),

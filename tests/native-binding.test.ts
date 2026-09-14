@@ -23,6 +23,7 @@ describe('durable native binding', () => {
     expect(nativeSessionBinding({ version: 1, records: [ready] }, 'dsh')).toEqual(ref)
     expect(() => nativeSessionBinding({ version: 1, records: [ready] }, 'another-session')).toThrow('another DSH session')
     expect(() => record(ANTIGRAVITY_SESSION_READY, { provider: 'antigravity', ref: { ...ref, resumeCursor: { provider: 'another', value: 'native' } } })).toThrow('corrupt')
+    expect(() => record(ANTIGRAVITY_SESSION_READY, { provider: 'antigravity', ref: { ...ref, provider: 'cursor-agent' } })).toThrow('corrupt')
   })
   it('validates authorization without treating it as a native binding', () => {
     const audit = record(ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, { provider, session: 'dsh', mode: 'full-access' })
