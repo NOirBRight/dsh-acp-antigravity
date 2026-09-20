@@ -23,7 +23,8 @@ function providerSourceAlias(providerDir: string): { find: RegExp; replacement: 
     .filter(subpath => subpath !== './package.json')
     .map(subpath => {
       const specifier = subpath === '.' ? '@deepseek-ai/dsh-acp-provider' : '@deepseek-ai/dsh-acp-provider' + subpath.slice(1)
-      const file = join(providerDir, 'src', (subpath === '.' ? 'index' : subpath.slice(2)) + '.ts')
+      const stem = join(providerDir, 'src', subpath === '.' ? 'index' : subpath.slice(2))
+      const file = existsSync(stem + '.ts') ? stem + '.ts' : stem + '.tsx'
       if (!existsSync(file)) throw new Error('declared export has no current source file: ' + subpath + ' -> ' + file)
       return { find: new RegExp('^' + escapeRegExp(specifier) + '$'), replacement: file }
     })

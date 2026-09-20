@@ -1,3 +1,10 @@
+## v0.1.11
+
+- Render normalized native tools through the shared Provider UI and persist bounded, valid structured previews.
+- Forward the latest user's durable or inline image attachments, including pure-image prompts, to Antigravity ACP.
+- Coalesce transient activity, serve bounded read-after pages, and retain the browser's incremental session cache across navigation.
+- Re-resolve the live model for every native continuation; approved plans continue with Plan mode committed off after the Host turn, while refusal keeps Plan active.
+
 ## v0.1.10
 
 Register catalogId/binding/unknown against providers-ui 0.2.9.

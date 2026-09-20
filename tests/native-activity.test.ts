@@ -1,9 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ACP_SETTINGS_RPC_CHANNEL } from '../src/client-contract.js'
 import {
-  ACTIVITY_ENDPOINT,
   decodeActivityHistory,
   type AntigravityActivityRecord,
 } from '../src/activity-contract.js'
@@ -14,15 +12,27 @@ import {
   ANTIGRAVITY_USER_QUESTION_ANSWER,
   type AntigravityToolStatus,
 } from '../src/tool-events.js'
-import { foldActivityRecords, loadActivityHistory, type AntigravityToolRowData } from '../src/web/native-activity.js'
+import { foldActivityRecords, type AntigravityToolRowData } from '../src/web/native-activity.js'
 import { AntigravityToolNode } from '../src/web/AntigravityToolNode.js'
 import { groupNativeActivity } from '../src/web/native-tree.js'
-import { en, type AcpSettingsKey } from '../src/web/locales.js'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import { en } from '../src/web/locales.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   DisclosureRow: (props: { title?: string, collapsedContent?: unknown, children?: unknown }) =>
     createElement('div', { 'data-disclosure': props.title }, props.collapsedContent as never, props.children as never),
   IconAgentPresetOutline16: () => null,
+}))
+
+vi.mock('@deepseek-ai/dsh-acp-provider/native-ui', () => ({
+  NativeToolCard: (props: { callId: string; nativeName: string; toolName: string; summary: string; state: string; input?: string; output?: string; detail?: { kind: string } }) => createElement('div', {
+    'data-native-tool-card': props.callId, 'data-state': props.state, title: props.nativeName,
+  }, props.toolName, createElement('span', null, props.summary),
+  props.detail?.kind === 'read' ? createElement('div', { 'data-read-block': '' }, JSON.stringify(props.detail))
+    : props.detail?.kind === 'diff' ? createElement('div', { 'data-diff-block': '' }, JSON.stringify(props.detail))
+      : props.detail?.kind === 'terminal' ? createElement('div', { 'data-terminal-block': '' }, JSON.stringify(props.detail))
+        : createElement('div', { 'data-native-io': '' }, props.input, props.output),
+  props.detail === undefined ? null : createElement('button', null, 'Inspect')),
 }))
 
 const T0 = '2026-09-07T03:38:25.046Z'
@@ -66,12 +76,10 @@ function ready(seq: number, time: string): AntigravityActivityRecord {
   return { seq, time, type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity' } }
 }
 
-function pluginT(key: AcpSettingsKey): string {
-  return en[key]
-}
+const conversationT: TranslateNS<'conversation'> = key => key
 
 function node(row: AntigravityToolRowData) {
-  return createElement(AntigravityToolNode, { row, t: pluginT })
+  return createElement(AntigravityToolNode, { row, conversationT })
 }
 
 describe('Antigravity native activity fold', () => {
@@ -171,49 +179,6 @@ describe('Antigravity activity history', () => {
   })
 })
 
-describe('Antigravity activity loader', () => {
-  function okRpc(value: unknown) {
-    return { call: vi.fn().mockResolvedValue({ ok: true, value }) }
-  }
-
-  it('reads one session history through the activity endpoint', async () => {
-    const rpc = okRpc({
-      version: 1,
-      records: [
-        { seq: 1, time: T0, type: 'antigravity/session-ready', data: { provider: 'antigravity' } },
-        { seq: 2, time: T0, type: 'antigravity/tool-start', data: { toolId: 't', name: 'ls la', status: 'running' } },
-      ],
-    })
-    const { rows, agents } = await loadActivityHistory(rpc, 'session-1')
-    expect(rpc.call).toHaveBeenCalledWith(ACP_SETTINGS_RPC_CHANNEL, ACTIVITY_ENDPOINT, { sessionId: 'session-1' }, undefined)
-    expect(rows).toHaveLength(1)
-    expect(agents).toEqual([])
-    expect(rows[0]?.state.name).toBe('ls la')
-  })
-
-  it('throws the host message when the endpoint reports failure', async () => {
-    const rpc = { call: vi.fn().mockResolvedValue({ ok: false, error: { message: 'nope' } }) }
-    await expect(loadActivityHistory(rpc, 'session-1')).rejects.toThrow('nope')
-  })
-
-  it('forwards abort to the rpc and propagates cancellation', async () => {
-    let captured: AbortSignal | undefined
-    const rpc = {
-      call: vi.fn().mockImplementation((_channel: string, _endpoint: string, _payload: unknown, signal?: AbortSignal) => {
-        captured = signal
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener('abort', () => { reject(signal.reason) })
-        })
-      }),
-    }
-    const controller = new AbortController()
-    const pending = loadActivityHistory(rpc, 'session-1', controller.signal)
-    controller.abort()
-    await expect(pending).rejects.toBe(controller.signal.reason)
-    expect(captured).toBe(controller.signal)
-  })
-})
-
 describe('Antigravity tool row renderer', () => {
   it('renders a settled bash row with canonical args and result as plain text', () => {
     const rows = foldActivityRecords([
@@ -222,15 +187,14 @@ describe('Antigravity tool row renderer', () => {
     ])
     const row = { ...rows[0]!, state: { ...rows[0]!.state, input: '{"CommandLine":"ls -la","description":"List"}' } }
     const markup = renderToStaticMarkup(node(row))
-    expect(markup).toContain('data-state="done"')
-    expect(markup).toContain(en.statusCompleted)
+    expect(markup).toContain('data-state="ok"')
     expect(markup).toContain('bash')
-    expect(markup).toContain('command: ls -la')
+    expect(markup).toContain('&quot;command&quot;:&quot;ls -la&quot;')
     expect(markup).toContain('a.ts')
+    expect(markup).toContain('data-terminal-block')
     expect(markup).not.toContain('href=')
     expect(markup).not.toContain('<a ')
-    expect(markup).not.toContain('<button')
-    expect(markup).not.toContain('Inspect')
+    expect(markup).toContain('Inspect')
   })
 
   it('renders file paths as plain text with no file link or inspect affordance', () => {
@@ -240,10 +204,10 @@ describe('Antigravity tool row renderer', () => {
     ])
     const markup = renderToStaticMarkup(node(rows[0]!))
     expect(markup).toContain('/tmp/a.txt')
-    expect(markup).toContain('<span')
+    expect(markup).toContain('data-read-block')
     expect(markup).not.toContain('href=')
     expect(markup).not.toContain('<a ')
-    expect(markup).not.toContain('Inspect')
+    expect(markup).toContain('Inspect')
   })
 
   it('keeps an unknown spawn launch verbatim as an ordinary settled row', () => {
@@ -252,7 +216,7 @@ describe('Antigravity tool row renderer', () => {
       update(80, T2, 'agent:26', 'completed', { output: 'Run parallel review subagents' }),
     ])
     const markup = renderToStaticMarkup(node(rows[0]!))
-    expect(markup).toContain('data-state="done"')
+    expect(markup).toContain('data-state="ok"')
     expect(markup).toContain('Running start subagent')
     expect(markup).toContain('Run parallel review subagents')
     expect(markup).not.toContain(en.activityChildUnknown)
@@ -265,7 +229,6 @@ describe('Antigravity tool row renderer', () => {
     ])
     const markup = renderToStaticMarkup(node(rows[0]!))
     expect(markup).toContain('data-state="error"')
-    expect(markup).toContain(en.statusFailed)
     expect(markup).toContain('read')
     expect(markup).toContain('boom')
   })
@@ -275,7 +238,6 @@ describe('Antigravity tool row renderer', () => {
     const row = { ...rows[0]!, state: { ...rows[0]!.state, input: 'git status -s' } }
     const markup = renderToStaticMarkup(node(row))
     expect(markup).toContain('data-state="running"')
-    expect(markup).toContain(en.statusRunning)
     expect(markup).toContain('git status -s')
   })
 

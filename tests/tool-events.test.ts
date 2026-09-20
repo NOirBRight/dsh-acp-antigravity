@@ -137,7 +137,7 @@ describe('ACP tool activity durable event family', () => {
 
     const chunks: unknown[] = []
     await expect((async () => {
-      for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [] })) chunks.push(chunk)
+      for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1', messages: [{ role: 'user', content: 'start' }] })) chunks.push(chunk)
     })()).rejects.toThrow('startup failed')
     expect(chunks).toEqual([])
     expect(sessionReady).toBe(0)

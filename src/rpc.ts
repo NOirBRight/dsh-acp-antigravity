@@ -4,9 +4,14 @@ import { promisify } from 'node:util'
 import {
   ACTIVITY_BINDING_ENDPOINT,
   ACTIVITY_ENDPOINT,
+  ACTIVITY_READ_AFTER_ENDPOINT,
+  ACTIVITY_STALE_CURSOR,
+  ActivityCursorStaleError,
+  decodeActivityPageRequest,
   decodeActivitySessionId,
   nativeSessionBinding,
   type AntigravityActivityHistory,
+  type AntigravityActivityPage,
 } from './activity-contract.js'
 import {
   ACP_SETTINGS_RPC_CHANNEL,
@@ -41,8 +46,9 @@ function activityError(error: unknown): string {
 export interface AcpSettingsRpcDeps {
   snapshot(): Promise<AcpSettingsSnapshot>
   catalog(): Promise<{ groups: readonly { id: string; name: string; models: readonly { id: string; name: string; reasoning?: { efforts: readonly { id: string; name: string }[]; defaultEffort?: string } }[] }[] }>
-  quota(): Promise<AntigravityQuotaSnapshot>
+  quota(signal?: AbortSignal): Promise<AntigravityQuotaSnapshot>
   readActivity(sessionId: string): AntigravityActivityHistory
+  readActivityAfter(sessionId: string, afterSeq: number): AntigravityActivityPage
   applyConfig(config: AcpAntigravitySettingsConfig): Promise<void>
   run(action: string, value?: unknown, signal?: AbortSignal): Promise<unknown>
 }
@@ -54,7 +60,7 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
     if (endpoint === CATALOG_ENDPOINT) return { ok: true, value: await deps.catalog() }
     if (endpoint === QUOTA_ENDPOINT) {
       try {
-        return { ok: true, value: await deps.quota() }
+        return { ok: true, value: await deps.quota(signal) }
       } catch (error) {
         return fail(errorText(error))
       }
@@ -70,6 +76,16 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
         }
         return { ok: true, value: history }
       } catch (error) {
+        return fail(activityError(error))
+      }
+    }
+    if (endpoint === ACTIVITY_READ_AFTER_ENDPOINT) {
+      const request = decodeActivityPageRequest(payload)
+      if (request === undefined) return fail('invalid Antigravity activity request')
+      try {
+        return { ok: true, value: await deps.readActivityAfter(request.sessionId, request.afterSeq) }
+      } catch (error) {
+        if (error instanceof ActivityCursorStaleError) return { ok: false, error: { code: ACTIVITY_STALE_CURSOR, message: 'Antigravity activity cursor is stale; the history must be reloaded.' } }
         return fail(activityError(error))
       }
     }
@@ -105,7 +121,7 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
   }
 }
 
-/** Register the host channel and attach its disposer to this fiber. The ctx must be an injected connection scope: touching connection on the plugin root ctx throws without inject on the target host. */
+/** Register the host channel and attach its disposer to this fiber. */
 export function registerAcpSettingsRpc(ctx: { effect(fn: () => unknown, name?: string): void; connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>): unknown } } }, deps: AcpSettingsRpcDeps): void {
   ctx.effect(
     () => ctx.connection.rpc.handle(ACP_SETTINGS_RPC_CHANNEL, createAcpSettingsRpcHandler(deps)),

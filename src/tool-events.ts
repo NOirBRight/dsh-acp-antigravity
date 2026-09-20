@@ -1,6 +1,7 @@
 /** Replayable durable events for Antigravity native tool activity. */
 
 import type { ExternalAgentEvent, ExternalAgentSessionRef, ExternalAgentOwnership } from '@deepseek-ai/dsh-acp-provider'
+import { boundNativeToolPreview } from '@deepseek-ai/dsh-acp-provider/native-preview'
 import { isRecord, stringValue } from './decode.js'
 import type { NativeRequestTelemetry, NativeUsageSnapshots } from './request-telemetry.js'
 
@@ -9,7 +10,7 @@ export const ANTIGRAVITY_REQUEST_TELEMETRY = 'antigravity/request-telemetry' as 
 /** Raw pre-difference SDK usage evidence for one native prompt. */
 export const ANTIGRAVITY_USAGE_SNAPSHOTS = 'antigravity/usage-snapshots' as const
 
-const MAX_TOOL_TEXT = 4000
+export const ANTIGRAVITY_MAX_TOOL_TEXT_CHARS = 4000
 
 export const ANTIGRAVITY_SESSION_READY = 'antigravity/session-ready' as const
 export const ANTIGRAVITY_TOOL_START = 'antigravity/tool-start' as const
@@ -306,5 +307,5 @@ function stringAt(value: Record<string, unknown> | undefined, key: string): stri
 }
 
 function truncate(text: string): string {
-  return text.slice(0, MAX_TOOL_TEXT)
+  return boundNativeToolPreview(text, ANTIGRAVITY_MAX_TOOL_TEXT_CHARS)
 }

@@ -40,6 +40,11 @@ function handlerWith(backing: (sessionId: string) => AntigravityActivityHistory)
     catalog: async () => ({ groups: [] }),
     quota: async () => { throw new Error('Antigravity provider is uninstalled') },
     readActivity: backing,
+    readActivityAfter: (sessionId, afterSeq) => {
+      const history = backing(sessionId)
+      const records = history.records.slice(afterSeq)
+      return { version: history.version, records, nextCursor: records.at(-1)?.seq ?? afterSeq, hasMore: false }
+    },
     applyConfig: async () => {},
     run: async () => ({}),
   })

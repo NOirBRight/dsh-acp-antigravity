@@ -77,6 +77,8 @@ describe('Native history shared subscription', () => {
         { seq: 2, time: T1, type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'Read', status: 'running' } },
         failRecord,
       ],
+      nextCursor: 3,
+      hasMore: false,
     }
     let calls = 0
     const rpc = {
@@ -111,6 +113,8 @@ describe('Native history shared subscription', () => {
         { seq: 1, time: T0, type: 'antigravity/session-ready', data: { provider: 'antigravity' } },
         { seq: 2, time: T1, type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'Read', status: 'running' } },
       ],
+      nextCursor: 2,
+      hasMore: false,
     }
     const rpc = {
       call: vi.fn().mockImplementation((_c: string, _e: string, _p: unknown, signal?: AbortSignal) => new Promise(resolve => {
@@ -145,6 +149,8 @@ describe('Native history shared subscription', () => {
         { seq: 1, time: T0, type: 'antigravity/session-ready', data: { provider: 'antigravity' } },
         { seq: 2, time: T1, type: ANTIGRAVITY_TOOL_START, data: { toolId: 'tool-1', name: 'Read', status: 'running' } },
       ],
+      nextCursor: 2,
+      hasMore: false,
     }
     const rpc = {
       call: vi.fn().mockImplementation(() => new Promise(resolve => {

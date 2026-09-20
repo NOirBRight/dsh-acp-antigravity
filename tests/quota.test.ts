@@ -334,6 +334,7 @@ describe('quota RPC contract', () => {
       catalog: async () => ({ groups: [] }),
       quota: async () => fixed,
       readActivity: () => ({ version: ACTIVITY_SCHEMA_VERSION, records: [] }),
+      readActivityAfter: (_sessionId, afterSeq) => ({ version: ACTIVITY_SCHEMA_VERSION, records: [], nextCursor: afterSeq, hasMore: false }),
       applyConfig: async () => {},
       run: async () => ({}),
     })

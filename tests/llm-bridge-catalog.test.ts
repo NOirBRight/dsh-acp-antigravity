@@ -41,7 +41,7 @@ describe('Antigravity LLM catalog Host shape', () => {
       }),
     })
     const chunks: { type: string; usage?: Record<string, unknown> }[] = []
-    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [], sessionId: 's-usage-keys' })) {
+    for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', messages: [{ role: 'user', content: 'usage' }], sessionId: 's-usage-keys' })) {
       chunks.push(chunk as { type: string; usage?: Record<string, unknown> })
     }
     expect(chunks.filter(chunk => chunk.type === 'usage')).toEqual([

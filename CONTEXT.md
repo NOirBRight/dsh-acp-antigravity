@@ -59,8 +59,12 @@ A DSH parent loop starts a child whose selected model is Antigravity. The child 
 _Avoid_: ACP nested agent as DSH subagent, delegate RPC
 
 **ACP tool row**:
-Persisted plugin-owned native tool activity, readable via the authenticated `activity/read` RPC; never a DSH `tool-call` block (the loop would execute it) and never a conversation tab (official Chat/Trajectory unchanged).
+Persisted plugin-owned native tool activity, readable in bounded pages after an Activity cursor; never a DSH `tool-call` block (the loop would execute it) and never a conversation tab (official Chat/Trajectory unchanged). Transient updates may coalesce before persistence, but terminal and ordering-barrier records do not wait behind them.
 _Avoid_: Markdown dump, fake DSH tool
+
+**Activity cursor**:
+The last persisted native-activity sequence observed by a reader. `activity/read-after` resumes strictly after it; a cursor the retained history cannot satisfy is stale and forces that reader to rebuild from the beginning.
+_Avoid_: File offset, authentication token, native resume cursor
 
 **Vendor mark**:
 The official Antigravity logomark, colored with the theme (`currentColor`). Used on the card, Model Switch, and Provider Usage tile.

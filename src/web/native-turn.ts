@@ -1,7 +1,7 @@
 /** Per-turn native activity container for the Chat transcript.
  *
- * Matches only standard turn/start and turn/end session events: no custom
- * Core event is written or required. Each turn owns one container node whose
+ * Starts from standard turn/start and follows turn-bearing step, assistant, and
+ * context events; no custom Core event is written or required. Each turn owns one container node whose
  * display window is derived from the loaded Chat timeline (public
  * uiConversation binding, target "chat"): partition native rows by firstSeenAt
  * against loaded turn starts so gaps and trailing records never vanish when
@@ -40,8 +40,13 @@ export const nativeTurnDefinition: ConversationNodeDefinition<AntigravityNativeT
     if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 1) return null
     const id = String(turn)
     if (event.type === 'turn/start') return { id, role: 'start' }
+    if (event.type === 'user/message' && (event.data as { source?: { kind?: unknown } }).source?.kind === 'user') return null
     if (event.type === 'turn/end'
       || event.type === 'step/start'
+      || event.type === 'step/end'
+      || event.type === 'system/message'
+      || event.type === 'user/message'
+      || event.type === 'assistant/live-chunk'
       || event.type === 'assistant/chunk'
       || event.type === 'assistant/message') return { id, role: 'update' }
     return null
@@ -130,15 +135,19 @@ export function rowsForTurnWindow<T extends { readonly firstSeenAt: string }>(
 }
 
 function anchorOf(context: ConversationNodeContext<AntigravityNativeTurn>): number {
-  let seq = context.start?.event.seq
+  const seq = context.start?.event.seq
   let chunk: number | undefined
   let step: number | undefined
+  let after = Number.NEGATIVE_INFINITY
   for (const match of context.matches) {
     const next = match.event.seq
     if (typeof next !== 'number' || !Number.isFinite(next)) continue
-    if (match.event.type === 'assistant/chunk' && chunk === undefined) chunk = next
+    if ((match.event.type === 'assistant/live-chunk' || match.event.type === 'assistant/chunk') && chunk === undefined) chunk = next
     else if (match.event.type === 'step/start' && step === undefined) step = next
+    if (match.event.type === 'system/message' || match.event.type === 'user/message') after = Math.max(after, next)
   }
   const chosen = chunk ?? step ?? seq
-  return typeof chosen === 'number' && Number.isFinite(chosen) ? chosen : 0
+  const base = typeof chosen === 'number' && Number.isFinite(chosen) ? chosen : 0
+  // A fractional anchor sorts after the matched injection without claiming the next persisted sequence.
+  return after > base ? after + 0.001 : base
 }

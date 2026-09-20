@@ -1,24 +1,14 @@
-/* One folded native sidecar row through the plugin-owned read-only card.
- *
- * Pure renderer: no Core, no Chat, no durable DSH tool event. The folded row is
- * adapted to a presentation-only block (see native-tool-card) and rendered by
- * AntigravityReadonlyCard, which exposes no host callbacks: sidecar paths stay
- * plain text, no file is ever opened, no Inspect affordance exists, and nothing
- * here dispatches or executes a tool. The t prop is the plugin settings copy,
- * which owns the card labels; the conversation locale seat is not needed.
- */
+/* One folded Antigravity sidecar row through the shared ACP read-only tool card. */
 import type { JSX } from 'react'
-import type { AcpSettingsKey } from './locales.js'
+import { NativeToolCard, type NativeToolTranslate } from '@deepseek-ai/dsh-acp-provider/native-ui'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AntigravityToolRowData } from './native-activity.js'
-import { AntigravityReadonlyCard } from './AntigravityReadonlyCard.js'
-import { nativeToolBlock } from './native-tool-card.js'
+import { nativeToolCardModel } from './native-tool-card.js'
 
-/* One folded tool row as the plugin-owned read-only card. */
-export function AntigravityToolNode({ row, t }: {
+export function AntigravityToolNode({ row, conversationT }: {
   readonly row: AntigravityToolRowData
-  readonly t: (key: AcpSettingsKey) => string
+  readonly conversationT: TranslateNS<'conversation'>
 }): JSX.Element {
-  const parsed = Date.parse(row.firstSeenAt)
-  const { toolName, nativeName, callId, block } = nativeToolBlock(row.state, Number.isFinite(parsed) ? parsed : 0)
-  return <AntigravityReadonlyCard callId={callId} toolName={toolName} nativeName={nativeName} block={block} t={t} />
+  const translate: NativeToolTranslate = conversationT
+  return <NativeToolCard {...nativeToolCardModel(row.state)} t={translate} />
 }

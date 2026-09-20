@@ -52,6 +52,11 @@ describe('Antigravity native turn definition', () => {
     expect(nativeTurnDefinition.match(turnStart(10, 1000, 3))).toEqual({ id: '3', role: 'start' })
     expect(nativeTurnDefinition.match(turnEnd(20, 2000, 3))).toEqual({ id: '3', role: 'update' })
     expect(nativeTurnDefinition.match(stepStart(11, 1100, 3))).toEqual({ id: '3', role: 'update' })
+    expect(nativeTurnDefinition.match({ type: 'assistant/live-chunk', seq: SessionSeq(12), time: 1200, data: { turn: 3 } } as never)).toEqual({ id: '3', role: 'update' })
+    expect(nativeTurnDefinition.match({ type: 'system/message', seq: SessionSeq(13), time: 1300, data: { turn: 3 } } as never)).toEqual({ id: '3', role: 'update' })
+    expect(nativeTurnDefinition.match({ type: 'user/message', seq: SessionSeq(14), time: 1400, data: { turn: 3, source: { kind: 'plugin' } } } as never)).toEqual({ id: '3', role: 'update' })
+    expect(nativeTurnDefinition.match({ type: 'user/message', seq: SessionSeq(15), time: 1500, data: { turn: 3, source: { kind: 'user' } } } as never)).toBeNull()
+    expect(nativeTurnDefinition.match({ type: 'user/message', seq: SessionSeq(16), time: 1600, data: { source: { kind: 'plugin' } } } as never)).toBeNull()
   })
 
   it('opens a window on start and closes it on end', () => {
@@ -139,6 +144,22 @@ describe('Antigravity native turn definition', () => {
       ],
     }
     expect(nativeTurnDefinition.buildViewNode?.(ctx)).toMatchObject({ anchorSeq: 12 })
+  })
+
+  it('places a numeric-turn context injection after the first assistant chunk', () => {
+    const start = turnStart(10, 1000, 3)
+    const chunk = { type: 'assistant/live-chunk', seq: SessionSeq(12), time: 1200, data: { turn: 3 } } as const
+    const injected = { type: 'user/message', seq: SessionSeq(14), time: 1400, data: { turn: 3, source: { kind: 'skill-catalog' } } } as const
+    const loc = { kind: 'unresolved' as const }
+    const ctx = {
+      ...context({ turn: 3, startMs: 1000, endMs: 2000 }, 10),
+      matches: [
+        { event: start, role: 'start' as const, location: loc },
+        { event: chunk, role: 'update' as const, location: loc },
+        { event: injected, role: 'update' as const, location: loc },
+      ],
+    }
+    expect(nativeTurnDefinition.buildViewNode?.(ctx)).toMatchObject({ anchorSeq: 14.001 })
   })
 
   it('builds one chat node anchored at the turn start', () => {

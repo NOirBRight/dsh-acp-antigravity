@@ -30,6 +30,7 @@ describe('Antigravity LLM bridge', () => {
   ])('uses session plan state, not output or tool hints: $text', async ({ text, enabled, progress }) => {
     const prompts: string[] = []
     let reviews = 0
+    const planModes: boolean[] = []
     const adapter = bridgeWithStubProvider({
       info: { id: providerId('antigravity'), name: 'Antigravity' },
       health: { status: 'ready' },
@@ -45,6 +46,7 @@ describe('Antigravity LLM bridge', () => {
       }),
     }, undefined, undefined, {
       isPlanMode: id => { expect(id).toBe('session-1'); return enabled },
+      setPlanMode: (id, active) => { expect(id).toBe('session-1'); planModes.push(active) },
       ask: async () => { reviews++; return { answers: [{ id: 'plan-review', selected: ['Approve'] }] } },
     })
     for await (const chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'session-1',
@@ -53,10 +55,34 @@ describe('Antigravity LLM bridge', () => {
       tools: [{ name: 'exit_plan_mode' }],
     })) void chunk
     expect(reviews).toBe(enabled ? 1 : 0)
+    expect(planModes).toEqual(enabled ? [false] : [])
     expect(prompts).toEqual(enabled
       ? ['输出2000字，随便什么内容，我来测试tps', 'The user approved the plan. Carry it out now.']
       : ['输出2000字，随便什么内容，我来测试tps'])
     await adapter.dispose()
+  })
+
+  it('keeps Plan mode active when review is refused', async () => {
+    const prompts: string[] = []
+    const planModes: boolean[] = []
+    const adapter = bridgeWithStubProvider({
+      info: { id: providerId('antigravity'), name: 'Antigravity' },
+      health: { status: 'ready' },
+      listModels: async () => [validListModel()],
+      openSession: async () => ({
+        ref: validRef(), supportedModes: [...VALID_MODES], dispose: async () => undefined,
+        runTurn: async (request: { prompt: string }) => { prompts.push(request.prompt); return { status: 'completed' as const, text: 'draft' } },
+      }),
+    }, undefined, undefined, {
+      isPlanMode: () => true,
+      setPlanMode: (_id, active) => { planModes.push(active) },
+      ask: async request => ({ answers: [{ id: request.questions[0]!.id, selected: ['Keep planning'] }] }),
+    })
+    try {
+      for await (const _chunk of adapter.stream({ provider: 'antigravity', model: 'gemini', sessionId: 'plan-refused', messages: [{ source: { kind: 'user' }, content: 'plan' }] })) { /* drain */ }
+      expect(prompts).toEqual(['plan'])
+      expect(planModes).toEqual([])
+    } finally { await adapter.dispose() }
   })
 
   it('awaits an in-flight native catalog before resolving effort variants', async () => {

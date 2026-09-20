@@ -119,7 +119,7 @@ export class AntigravitySession implements ExternalAgentSession {
 }
 
 async function promptBlocks(prompt: string, attachments: readonly ExternalAgentAttachment[] | undefined, filesystem: AntigravityClientFilesystem | undefined): Promise<readonly Record<string, string>[]> {
-  const blocks: Record<string, string>[] = [{ type: 'text', text: prompt }]
+  const blocks: Record<string, string>[] = prompt === '' ? [] : [{ type: 'text', text: prompt }]
   for (const attachment of attachments ?? []) {
     if (attachment.path !== undefined && attachment.data !== undefined) throw new Error('Antigravity attachment cannot contain both path and data')
     if (attachment.path !== undefined) {

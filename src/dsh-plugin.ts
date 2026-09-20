@@ -6,6 +6,7 @@ import { allowDshRuntime } from './compatibility.js'
 import type { ActivityBindingHostContext } from './activity-binding.js'
 import { ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, nativeSessionBinding } from './activity-contract.js'
 import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
+import { AntigravityActivityCoalescer } from './activity-coalescer.js'
 import type { AcpAntigravitySettingsConfig, AcpSettingsRow, AcpSettingsSnapshot } from './client-contract.js'
 import { deriveAntigravityHarnessPath, validateAntigravityInstallation } from './installation.js'
 import { openDefaultBrowser } from './browser.js'
@@ -24,6 +25,38 @@ import { parseAntigravityCallbackUrl } from './auth.js'
 import type { AntigravityAuthorizationRequest } from './types.js'
 import { ANTIGRAVITY_SESSION_READY, type AntigravityToolEvent } from './tool-events.js'
 
+/** One ordered, bounded activity writer for a history root. */
+export function createAntigravityActivityWriter(rootDirectory: string): {
+  readonly store: AntigravityActivityStore
+  append(sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void
+  flush(sessionId: string): void
+  flushAll(): void
+  release(sessionId: string): void
+  pendingCount(sessionId: string): number
+} {
+  const store = new AntigravityActivityStore(rootDirectory)
+  const coalescer = new AntigravityActivityCoalescer({
+    append: (sessionId, events) => {
+      try {
+        store.append(sessionId, events)
+      } catch {
+        throw new Error('Unable to persist Antigravity activity; native execution stopped.')
+      }
+    },
+  })
+  return {
+    store,
+    append: (sessionId, events) => {
+      if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
+      coalescer.append(sessionId, events)
+    },
+    flush: sessionId => { coalescer.flush(sessionId) },
+    flushAll: () => { coalescer.flushAll() },
+    release: sessionId => { coalescer.release(sessionId) },
+    pendingCount: sessionId => coalescer.pendingCount(sessionId),
+  }
+}
+
 /** Loader-supplied Settings values. Empty paths stay on the page until the user locates them. */
 export interface DshPluginConfig {
   readonly executablePath?: string
@@ -34,6 +67,11 @@ export interface DshPluginConfig {
   readonly modelDiscoveryTimeoutMs?: number
   readonly model?: string
   readonly enabled?: boolean
+}
+
+type PlanModeService = {
+  get?(agent: unknown): { active: boolean; pending?: boolean }
+  set(agent: unknown, active: boolean): 'committed' | 'queued' | 'cancelled' | 'noop'
 }
 
 /** Host context used by the Settings RPC plugin. */
@@ -73,6 +111,15 @@ function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown
   if (sessionId === undefined) return undefined
   const agents = ctx.get?.('agents') as { get?: (id: string) => unknown } | undefined
   return agents?.get?.(sessionId)
+}
+
+function planModeFor(agent: { ctx?: { reflect?: { store?: Record<PropertyKey, { name?: string; value?: unknown; fiber?: { state?: number } }> } } }): PlanModeService | undefined {
+  const store = agent.ctx?.reflect?.store
+  if (store === undefined) return undefined
+  const matches = Reflect.ownKeys(store).map(key => store[key])
+    .filter(entry => entry?.name === 'planMode' && entry.fiber?.state === 2 && typeof (entry.value as { set?: unknown } | undefined)?.set === 'function')
+  // ponytail: require one controller until DSH exposes an exact preset-owned resolver.
+  return matches.length === 1 ? matches[0]!.value as PlanModeService : undefined
 }
 
 /** File-effect policy modes shared with the sandbox-policy service (structural, no new dependency). */
@@ -154,19 +201,14 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     if (runtime !== undefined) scope.effect(() => runtime.adapters.register({ provider: 'antigravity', role: 'agent' }))
   })
   const home = dshHome()
-  const activity = new AntigravityActivityStore(join(home, 'plugin-data', 'antigravity', 'history'))
+  const activity = createAntigravityActivityWriter(join(home, 'plugin-data', 'antigravity', 'history'))
   const { installActivityBindingGuard } = await import('./activity-binding.js')
-  installActivityBindingGuard(ctx, activity, sessionId => {
+  installActivityBindingGuard(ctx, activity.store, sessionId => {
     const agent = agentFor(ctx, sessionId) as { session?: { snapshotEvents?: () => readonly { readonly type: string; readonly data?: unknown }[] } } | undefined
     return agent?.session?.snapshotEvents?.()
   })
   const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
-    if (sessionId === undefined) throw new Error('Native activity requires an explicit DSH session id')
-    try {
-      activity.append(sessionId, events)
-    } catch {
-      throw new Error('Unable to persist Antigravity activity; native execution stopped.')
-    }
+    activity.append(sessionId, events)
   }
   let live = resolvePluginConfig(config, loadPersistedConfig(home))
   let authorizationUrl: string | undefined
@@ -180,6 +222,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     auditFullAccess: entry => appendActivity(entry.session, [{ type: ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, data: entry }]),
   })
   let bridge: ReturnType<typeof createAntigravityLlmBridge> | undefined
+  const planCommitTimers = new Map<string, ReturnType<typeof setTimeout>>()
   let changing = false
   const editors = new ExternalAgentSettingsEditorRegistry()
   let installed: InstalledAntigravityProvider | undefined
@@ -298,7 +341,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   await mount(live)
   void refreshCatalog().catch(() => undefined) // catalog probe: UI still shows last snapshot
   if (typeof ctx.inject === 'function') {
-    ctx.inject(['llm'], (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void } }) => {
+    ctx.inject(['llm'], scope => {
       const adapter = createAntigravityLlmBridge({ registry, getProvider: () => changing || !live.enabled ? undefined : installed?.provider }, () => models, next => { models = [...next]; savePersistedModels(home, models) }, {
         ask: async request => {
           const service = ctx.get?.('userQuestions') as { ask?: (payload: Record<string, unknown>) => Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }> } | undefined
@@ -308,12 +351,62 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           return service.ask({ ...rest, ...(agent === undefined ? {} : { agent }) })
         },
         appendSessionReady: (sessionId, ref) => { appendActivity(sessionId, [{ type: ANTIGRAVITY_SESSION_READY, data: { provider: 'antigravity', ref } }]) },
-        loadSession: id => nativeSessionBinding(activity.read(id), id),
+        loadSession: id => nativeSessionBinding(activity.store.read(id), id),
         appendToolEvents: (sessionId, events: readonly AntigravityToolEvent[]) => { appendActivity(sessionId, events) },
+        flushActivity: sessionId => { activity.flush(sessionId) },
+        flushActivityAll: () => { activity.flushAll() },
+        releaseActivity: sessionId => { activity.release(sessionId) },
         isPlanMode: sessionId => {
           const agent = agentFor(ctx, sessionId) as { session: unknown } | undefined
           const projections = ctx.get?.('sessionProjections') as { stateOf(session: unknown, key: 'plan'): { active: boolean } | undefined } | undefined
           return agent !== undefined && projections?.stateOf(agent.session, 'plan')?.active === true
+        },
+        setPlanMode: (sessionId, active) => {
+          const agent = agentFor(ctx, sessionId) as { session?: unknown; ctx?: { reflect?: { store?: Record<PropertyKey, { name?: string; value?: unknown; fiber?: { state?: number } }> } } } | undefined
+          const planMode = agent === undefined ? undefined : planModeFor(agent)
+          if (agent?.session === undefined || sessionId === undefined || planMode === undefined || planMode.set(agent, active) !== 'queued') return
+          const arm = (check: () => void): void => {
+            // ponytail: Plan exposes no turn-idle subscription; replace this low-frequency poll when it does.
+            const timer = setTimeout(check, 50)
+            ;(timer as { unref?: () => void }).unref?.()
+            planCommitTimers.set(sessionId, timer)
+          }
+          const settle = (): void => {
+            planCommitTimers.delete(sessionId)
+            const projections = ctx.get?.('sessionProjections') as {
+              stateOf(session: unknown, key: 'turnBoundary'): { openTurnStartSeq: number | null } | undefined
+            } | undefined
+            if (projections?.stateOf(agent.session, 'turnBoundary')?.openTurnStartSeq != null) {
+              arm(settle)
+              return
+            }
+            if (planMode.get?.(agent).active === active) return
+            planMode.set(agent, !active) // cancel the queued choice now that the Host turn is idle
+            planMode.set(agent, active)
+          }
+          const pending = planCommitTimers.get(sessionId)
+          if (pending !== undefined) clearTimeout(pending)
+          arm(settle)
+        },
+        resolveSelectedModel: sessionId => {
+          const agent = agentFor(ctx, sessionId) as { session?: unknown } | undefined
+          if (agent === undefined) return undefined
+          type Selection = { provider?: string; model?: string; reasoningEffort?: string }
+          const projections = ctx.get?.('sessionProjections') as {
+            stateOf(session: unknown, key: 'modelSelection'): { pending?: Selection | null; lastUsed?: Selection | null } | undefined
+          } | undefined
+          const state = agent.session === undefined ? undefined : projections?.stateOf(agent.session, 'modelSelection')
+          const selected = state?.pending ?? state?.lastUsed
+          if (selected === undefined || selected === null) return undefined
+          if (selected.provider !== undefined && selected.provider !== 'antigravity') throw new Error('Antigravity native turn refused: ' + selected.provider + '/' + (selected.model ?? ''))
+          if (selected.model === undefined || selected.model === '') throw new Error('Antigravity native turn refused: invalid model selection')
+          return { model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }) }
+        },
+        readImage: async (attachment, signal) => {
+          const store = ctx.get?.('attachments') as { readImage?: (ref: unknown, signal?: AbortSignal) => Promise<{ data: Uint8Array; ref: { mediaType: string; name?: string } }> } | undefined
+          if (store?.readImage === undefined) throw new Error('Antigravity image input requires the durable attachment service')
+          const stored = await store.readImage(attachment, signal)
+          return { data: stored.data, mimeType: stored.ref.mediaType, ...(typeof stored.ref.name === 'string' ? { name: stored.ref.name } : {}) }
         },
         resolvePolicy: sessionId => resolveSandboxPolicy(ctx, sessionId),
         requestApproval: input => requestNativeApproval(ctx, input),
@@ -332,7 +425,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       })
     })
   }
-  ctx.on('session/disposed', session => bridge?.release(session.id))
+  ctx.on('session/disposed', async session => {
+    try { activity.release(session.id) }
+    catch (error) { console.error('dsh-acp-antigravity: activity flush during session disposal failed', error) }
+    await bridge?.release(session.id)
+  })
   // The settings channel must register through an injected connection scope:
   // reading ctx.connection on the plugin root ctx throws without inject on the
   // target host and takes the whole profile down at load.
@@ -340,7 +437,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   ctx.inject(['connection'], scope => registerAcpSettingsRpc(scope, {
     snapshot,
     quota: () => quotaReader.snapshot(),
-    readActivity: sessionId => activity.read(sessionId),
+    readActivity: sessionId => activity.store.read(sessionId),
+    readActivityAfter: (sessionId, afterSeq) => activity.store.readActivityPage(sessionId, afterSeq),
     catalog: async () => {
       if (installed === undefined) return { groups: [] }
       if ('status' in await validateAntigravityInstallation(toProviderConfig(live))) return { groups: [] }
@@ -463,7 +561,11 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   }))
   ctx.effect(() => async () => {
     changing = true
+    for (const timer of planCommitTimers.values()) clearTimeout(timer)
+    planCommitTimers.clear()
     quotaReader.invalidate()
+    try { activity.flushAll() }
+    catch (error) { console.error('dsh-acp-antigravity: activity flush during teardown failed', error) }
     await bridge?.dispose()
     await installed?.dispose()
   }, 'dsh-acp-antigravity: provider')

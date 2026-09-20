@@ -28,6 +28,15 @@ export const ACTIVITY_ENDPOINT = 'activity/read'
 /** Settings-channel endpoint returning the native binding for one session. */
 export const ACTIVITY_BINDING_ENDPOINT = 'activity/binding'
 
+/** Settings-channel endpoint returning one bounded page strictly after an exclusive cursor. */
+export const ACTIVITY_READ_AFTER_ENDPOINT = 'activity/read-after'
+
+/** RPC error code for a page cursor that is ahead of the history the host holds. */
+export const ACTIVITY_STALE_CURSOR = 'stale-cursor'
+
+/** Fixed record ceiling requested for one incremental page; the store clamps to its own ceiling. */
+export const ACTIVITY_PAGE_RECORD_LIMIT = 500
+
 /** Schema version written on every history line and returned by reads. */
 export const ACTIVITY_SCHEMA_VERSION = 1
 
@@ -51,6 +60,24 @@ export type AntigravityActivityRecord =
 export interface AntigravityActivityHistory {
   readonly version: number
   readonly records: readonly AntigravityActivityRecord[]
+}
+
+/** One bounded incremental page: the records after a cursor plus how to continue. */
+export interface AntigravityActivityPage {
+  readonly version: number
+  readonly records: readonly AntigravityActivityRecord[]
+  /** Pass back as the next afterSeq: the last record's seq, or the requested cursor for an empty page. */
+  readonly nextCursor: number
+  /** True when the history holds further records after this page. */
+  readonly hasMore: boolean
+}
+
+/** A page cursor ahead of the history the store holds: the reader must resynchronize, never retry the cursor. */
+export class ActivityCursorStaleError extends Error {
+  constructor(cursor: number, records: number) {
+    super('Antigravity activity cursor ' + String(cursor) + ' is ahead of the ' + String(records) + '-record history')
+    this.name = 'ActivityCursorStaleError'
+  }
 }
 
 /** Read the latest native binding; legacy ready-only histories intentionally have no cursor.
@@ -104,6 +131,21 @@ export function decodeActivitySessionId(value: unknown): string | undefined {
   return typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId : undefined
 }
 
+/** Decode a strict cursor-read payload to its session id and exclusive cursor.
+ * @param value - Wire payload, exactly { sessionId, afterSeq } with a non-empty id and a non-negative safe integer cursor.
+ * @returns The decoded request, or undefined for any other shape.
+ */
+export function decodeActivityPageRequest(value: unknown): { readonly sessionId: string; readonly afterSeq: number } | undefined {
+  if (!isRecord(value)) return undefined
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || !keys.includes('sessionId') || !keys.includes('afterSeq')) return undefined
+  const sessionId = value.sessionId
+  const afterSeq = value.afterSeq
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') return undefined
+  if (typeof afterSeq !== 'number' || !Number.isSafeInteger(afterSeq) || afterSeq < 0) return undefined
+  return { sessionId, afterSeq }
+}
+
 /** Decode one history record.
  * @param line - One raw JSONL history line.
  * @param seq - Expected 1-based position; records must stay contiguous.
@@ -128,6 +170,25 @@ export function decodeActivityHistory(value: unknown): AntigravityActivityHistor
   if (value.version !== ACTIVITY_SCHEMA_VERSION) throw corrupt('history has an unknown version')
   if (!Array.isArray(value.records)) throw corrupt('history has invalid records')
   return { version: ACTIVITY_SCHEMA_VERSION, records: value.records.map((record, index) => decodeRecordValue(withVersion(record, index + 1), index + 1)) }
+}
+
+/** Decode one incremental page against the cursor it was requested with, so records are
+ * validated from `afterSeq + 1` instead of the `seq = 1` full-history read.
+ * @param value - Wire page claiming { version, records, nextCursor, hasMore }.
+ * @param afterSeq - Exclusive cursor the page was requested with.
+ * @returns The validated page.
+ */
+export function decodeActivityPage(value: unknown, afterSeq: number): AntigravityActivityPage {
+  if (!isRecord(value)) throw corrupt('page is not an object')
+  if (value.version !== ACTIVITY_SCHEMA_VERSION) throw corrupt('page has an unknown version')
+  if (!Array.isArray(value.records)) throw corrupt('page has invalid records')
+  if (typeof value.hasMore !== 'boolean') throw corrupt('page has an invalid continuation flag')
+  const nextCursor = value.nextCursor
+  if (typeof nextCursor !== 'number' || !Number.isSafeInteger(nextCursor) || nextCursor < afterSeq) throw corrupt('page has an invalid cursor')
+  const records = value.records.map((record, index) => decodeRecordValue(withVersion(record, afterSeq + index + 1), afterSeq + index + 1))
+  const last = records.at(-1)
+  if (last === undefined ? nextCursor !== afterSeq : last.seq !== nextCursor) throw corrupt('page cursor does not match its records')
+  return { version: ACTIVITY_SCHEMA_VERSION, records, nextCursor, hasMore: value.hasMore }
 }
 
 function withVersion(record: unknown, seq: number): Record<string, unknown> {

@@ -359,6 +359,15 @@ describe('Antigravity provider lifecycle', () => {
     expect(connections[1]?.isClosed).toBe(true)
   })
 
+  it('sends a pure image without an empty text block', async () => {
+    const connection = new FakeConnection()
+    const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })
+    const session = await provider.openSession({ route: route(), session: sessionId('pure-image'), permissionMode: 'approval-required', signal: new AbortController().signal })
+    await expect(session.runTurn({ turn: turnId('pure-image-turn'), prompt: '', attachments: [{ name: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }], permissionMode: 'approval-required', signal: new AbortController().signal }, host())).resolves.toMatchObject({ status: 'completed' })
+    expect(connection.calls.find(call => call.method === 'session/prompt')?.params).toMatchObject({ prompt: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }] })
+    await session.dispose()
+  })
+
   it('rejects path attachments outside DSH filesystem roots before prompting', async () => {
     const connection = new FakeConnection()
     const provider = new AntigravityProvider(config(), { cwd: '/workspace', launchSpec: async () => launchSpec(), connectionFactory: () => connection })

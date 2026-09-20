@@ -1,5 +1,7 @@
 /** Save round trip: an edit the editor patches must reach the persisted catalog overlay. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@deepseek-ai/dsh-acp-provider/native-ui', () => ({ NativeToolCard: () => null }))
 import {
   ACP_SETTINGS_RPC_CHANNEL,
   SAVE_ENDPOINT,

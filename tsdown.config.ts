@@ -12,7 +12,7 @@ const client: UserConfig = {
   dts: false,
   clean: false,
   deps: {
-    alwaysBundle: ['@deepseek-ai/dsh-acp-provider', 'dsh-llm-providers-ui/provider-ui', 'dsh-llm-providers-ui/usage-readers', 'dsh-llm-providers-ui/model-catalog', 'dsh-llm-providers-ui/provider-detail'],
+    alwaysBundle: ['@deepseek-ai/dsh-acp-provider', '@deepseek-ai/dsh-acp-provider/native-history', '@deepseek-ai/dsh-acp-provider/native-preview', '@deepseek-ai/dsh-acp-provider/native-ui', 'dsh-llm-providers-ui/provider-ui', 'dsh-llm-providers-ui/usage-readers', 'dsh-llm-providers-ui/model-catalog', 'dsh-llm-providers-ui/provider-detail'],
     neverBundle: [
       'react',
       'react/jsx-runtime',

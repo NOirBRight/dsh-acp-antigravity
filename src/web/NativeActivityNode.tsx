@@ -17,7 +17,7 @@ interface Labels {
 export function NativeActivityNode({ branch, ...labels }: { branch: NativeActivityBranch } & Labels): ReactNode {
   switch (branch.kind) {
     case 'tool': return <div title={branch.row.state.name} data-native-tool-id={branch.row.state.toolId} data-native-trajectory={branch.row.state.ownership?.trajectoryId}>
-      <AntigravityToolNode row={branch.row} t={labels.t} />
+      <AntigravityToolNode row={branch.row} conversationT={labels.conversationT} />
     </div>
     case 'text': return <div data-native-agent-text={branch.key} style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--dsh-content-font-size-secondary, 13px)', color: branch.thought ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-primary)' }}>{branch.text}</div>
   }

@@ -6,6 +6,7 @@ import {
   createSessionModelRoute,
   sessionId,
   turnId,
+  type ExternalAgentAttachment,
   type ExternalAgentPermissionDecision,
   type ExternalAgentPermissionRequest,
   type ExternalAgentProvider,
@@ -41,10 +42,17 @@ export interface BridgeAskRequest {
 export interface BridgeHost {
   /** Read the exact session’s current DSH Plan flag; absent state never authorizes plan review. */
   isPlanMode?(sessionId: string | undefined): boolean
+  /** Queue the canonical Host plan state transition after explicit approval. */
+  setPlanMode?(sessionId: string | undefined, active: boolean): void
+  /** Resolve the session picker at each native continuation, not only stream assembly. */
+  resolveSelectedModel?(sessionId: string | undefined): { model: string; reasoningEffort?: string } | undefined
   ask?(request: BridgeAskRequest): Promise<{ answers: { id: string; selected: string[]; custom?: string }[] }>
   appendSessionReady?(sessionId: string | undefined, ref: ExternalAgentSessionRef): void
   loadSession?(sessionId: string): ExternalAgentSessionRef | undefined
   appendToolEvents?(sessionId: string | undefined, events: readonly AntigravityToolEvent[]): void
+  flushActivity?(sessionId: string): void
+  flushActivityAll?(): void
+  releaseActivity?(sessionId: string): void
   /**
    * Resolve the authoritative sandbox policy for one stream call. The host reads
    * ctx.sandboxPolicy for the exact session; user and tool text never selects policy.
@@ -58,6 +66,8 @@ export interface BridgeHost {
    * Only 'allowed-once' grants; every other outcome denies.
    */
   requestApproval?(input: { sessionId: string | undefined; toolName: string; reason?: string; signal?: AbortSignal }): Promise<AntigravityApprovalOutcome>
+  /** Resolve one durable DSH image reference to validated bytes. */
+  readImage?(attachment: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array; mimeType: string; name?: string }>
 }
 
 /** Closed outcome of one canonical approval ask. Structural mirror of the approval-service vocabulary. */
@@ -72,15 +82,22 @@ export interface AntigravitySandboxPolicy {
   readonly workspaceRoot: string
 }
 
-export function lastUserText(messages: readonly unknown[]): string {
+function lastUserMessage(messages: readonly unknown[]): unknown {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (!isRecord(message)) continue
-    if (!(isRecord(message.source) && message.source.kind === 'user')) continue
-    const text = textOf(message.content)
-    if (text.length > 0) return text
+    if (isRecord(message.source)) {
+      if (message.source.kind === 'user') return message
+      continue
+    }
+    if (message.role === 'user') return message
   }
-  return ''
+  return undefined
+}
+
+export function lastUserText(messages: readonly unknown[]): string {
+  const message = lastUserMessage(messages)
+  return isRecord(message) ? textOf(message.content) : ''
 }
 
 export function lastSkillText(messages: readonly unknown[]): string {
@@ -100,6 +117,33 @@ export function acpPrompt(messages: readonly unknown[]): string {
   if (skill.length === 0) return user
   if (user.length === 0) return skill
   return skill + String.fromCharCode(10) + String.fromCharCode(10) + user
+}
+
+export async function acpAttachments(
+  messages: readonly unknown[],
+  readImage: BridgeHost['readImage'] | undefined,
+  signal?: AbortSignal,
+): Promise<readonly ExternalAgentAttachment[]> {
+  const message = lastUserMessage(messages)
+  const content = isRecord(message) ? message.content : undefined
+  if (!Array.isArray(content)) return []
+  const attachments: ExternalAgentAttachment[] = []
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== 'image') continue
+    if (typeof block.data === 'string' && typeof block.mimeType === 'string') {
+      attachments.push({ name: typeof block.name === 'string' ? block.name : 'image', mimeType: block.mimeType, data: block.data })
+      continue
+    }
+    if (!isRecord(block.attachment)) throw new Error('Antigravity image block has no attachment or data')
+    if (readImage === undefined) throw new Error('Antigravity image input requires the durable attachment service')
+    const stored = await readImage(block.attachment, signal)
+    attachments.push({
+      name: stored.name ?? (typeof block.attachment.name === 'string' ? block.attachment.name : 'image'),
+      mimeType: stored.mimeType,
+      data: Buffer.from(stored.data).toString('base64'),
+    })
+  }
+  return attachments
 }
 
 function formatPlanUpdate(event: { summary: string; steps: readonly string[] }): string {
@@ -251,9 +295,22 @@ export function createAntigravityLlmBridge(
     return wait ? listing : Promise.resolve([])
   }
   return {
-    async reset() { await runner.reset(); emittedToolIds.clear(); observedAgentTrajectories.clear() },
-    async release(id) { await runner.release(sessionId(id)); emittedToolIds.delete(id); observedAgentTrajectories.delete(id) },
-    async dispose() { await runner.dispose(); emittedToolIds.clear(); observedAgentTrajectories.clear() },
+    async reset() {
+      listing = undefined
+      try { hostAsk?.flushActivityAll?.() }
+      finally { await runner.reset(); emittedToolIds.clear(); observedAgentTrajectories.clear() }
+    },
+    async release(id) {
+      await runner.release(sessionId(id))
+      hostAsk?.releaseActivity?.(id)
+      emittedToolIds.delete(id)
+      observedAgentTrajectories.delete(id)
+    },
+    async dispose() {
+      listing = undefined
+      try { hostAsk?.flushActivityAll?.() }
+      finally { await runner.dispose(); emittedToolIds.clear(); observedAgentTrajectories.clear() }
+    },
     providerInfo: provider => ({ id: provider, name: 'Antigravity' }),
     // Native prompts can already have executed tools before a transport failure.
     providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 0, retryableCodes: [], initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 }),
@@ -301,19 +358,26 @@ export function createAntigravityLlmBridge(
       const natives = await nativeModels(true)
       if (natives.length === 0) throw new Error('Antigravity model catalog is unavailable')
       const collapsed = collapseNative(natives)
-      const selected = findCollapsed(collapsed, options.model)
-      if (selected === undefined) throw new Error('Unknown Antigravity model: ' + options.model)
-      const nativeModel = nativeAntigravityModelId(selected.id, options.reasoningEffort, natives.map(model => model.id), natives, selected.effortMap)
+      const toNative = (logical: string, effort?: string): string => {
+        const found = findCollapsed(collapsed, logical)
+        if (found === undefined) throw new Error('Unknown Antigravity model: ' + logical)
+        return nativeAntigravityModelId(found.id, effort, natives.map(model => model.id), natives, found.effortMap)
+      }
+      let nativeModel = toNative(options.model, options.reasoningEffort)
       const workspaceRoot = policy?.workspaceRoot
       if (getProvider() !== installed) throw new Error('Antigravity configuration changed before native execution')
-      const openRequest = {
-        route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
-        session: sessionId(key),
-        permissionMode,
-        fullAccessConfirmed: permissionMode === 'full-access',
-        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-        signal,
-      } as const
+      const openRequest = () => {
+        const live = hostAsk?.resolveSelectedModel?.(options.sessionId)
+        if (live?.model !== undefined && live.model !== '') nativeModel = toNative(live.model, live.reasoningEffort)
+        return {
+          route: createSessionModelRoute('external-agent', String(installed.info.id), nativeModel),
+          session: sessionId(key),
+          permissionMode,
+          fullAccessConfirmed: permissionMode === 'full-access',
+          ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+          signal,
+        } as const
+      }
       type Pending = { kind: 'thought' | 'text'; text: string }
       const pending: Pending[] = []
       let followUp: string | undefined
@@ -409,12 +473,21 @@ export function createAntigravityLlmBridge(
         return { thought, text, thoughtOpen, textOpen }
       }
       let active: Promise<ExternalAgentTurnResult> | undefined
-      const run = (text: string): Promise<ExternalAgentTurnResult> => {
-        active = runner.runTurn(openRequest, { turn: turnId('t' + String(++turns)), prompt: text, permissionMode, signal }, turnHost)
+      const run = (text: string, attachments: readonly ExternalAgentAttachment[] = []): Promise<ExternalAgentTurnResult> => {
+        const open = openRequest()
+        active = runner.runTurn(open, {
+          turn: turnId('t' + String(++turns)), prompt: text, model: open.route.model, permissionMode, signal,
+          ...(attachments.length === 0 ? {} : { attachments }),
+        }, turnHost)
         return active
       }
       try {
-        const first = run(prompt)
+        const attachments = await acpAttachments(options.messages, hostAsk?.readImage, signal)
+        if (prompt.trim().length === 0 && attachments.length === 0) {
+          yield { type: 'finish', reason: { kind: 'stop' } }
+          return
+        }
+        const first = run(prompt, attachments)
         let state = yield* drain(first, { thought: '', text: '', thoughtOpen: false, textOpen: false })
         const result = await first
         let finalStatus = result.status
@@ -438,6 +511,7 @@ export function createAntigravityLlmBridge(
             approved = false
           }
           if (approved) {
+            hostAsk.setPlanMode?.(options.sessionId, false)
             const second = run('The user approved the plan. Carry it out now.')
             state = yield* drain(second, state)
             const next = await second
@@ -452,6 +526,7 @@ export function createAntigravityLlmBridge(
           yield { type: 'block-end', index: 1, block: { type: 'text', text: assembled } }
         }
         for (const sample of usages.splice(0)) yield { type: 'usage', usage: hostUsage(sample) }
+        hostAsk?.flushActivity?.(options.sessionId)
         yield { type: 'finish', reason: finalStatus === 'cancelled'
           ? { kind: 'aborted', failure: { code: 'ABORTED', message: 'Native turn cancelled' } }
           : finalStatus === 'failed'
