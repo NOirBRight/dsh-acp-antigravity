@@ -272,7 +272,8 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
           pendingAuthorization = request
           authorizationUrl = request.authorizationUrl
           if (authAttempt !== undefined) authAttempt = { ...authAttempt, authorizationUrl: request.authorizationUrl }
-          try { openDefaultBrowser(request.authorizationUrl) } catch { /* Settings still shows the URL if the desktop opener is missing. */ }
+          // The pinned runtime already calls webbrowser.open before printing this URL.
+          // Opening it again here is the second tab. Settings still offers Open login page.
         } },
       )
     } finally { changing = false }

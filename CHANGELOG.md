@@ -1,3 +1,7 @@
+## 0.1.14
+
+- Sign-in no longer opens a second browser tab. The runtime already opens the Google URL; the plugin only keeps it for Open login page.
+
 ## 0.1.13
 
 - Detail page mounts the account model picker, and Install stays on the Account card.
