@@ -1,5 +1,9 @@
 ## v0.1.11
 
+## 0.1.12
+
+- Declare `webServer` on the Host `inject` list (and nested Connection scope) so ACP settings/snapshot RPC mounts on DSH 0.1.6+ inject enforcement.
+
 - Render normalized native tools through the shared Provider UI and persist bounded, valid structured previews.
 - Forward the latest user's durable or inline image attachments, including pure-image prompts, to Antigravity ACP.
 - Coalesce transient activity, serve bounded read-after pages, and retain the browser's incremental session cache across navigation.

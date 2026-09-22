@@ -14,7 +14,7 @@ describe('DSH settings plugin', () => {
 
   it('exports a Cordis plugin that registers settings RPC', async () => {
     expect(name).toBe('dsh-acp-antigravity')
-    expect(inject).toEqual(['connection'])
+    expect(inject).toEqual(['connection', 'webServer'])
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-settings-'))
     homes.push(home)
     process.env.DSH_HOME = home
@@ -32,7 +32,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true, modelDiscoveryTimeoutMs: 45_000 })
-    expect(injected).toContainEqual(['connection'])
+    expect(injected).toContainEqual(['connection', 'webServer'])
     const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)
     expect(handler).toEqual(expect.any(Function))
     const result = await handler!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
@@ -66,7 +66,7 @@ describe('DSH settings plugin', () => {
       },
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
-    expect(injected).toContainEqual(['connection'])
+    expect(injected).toContainEqual(['connection', 'webServer'])
     expect(handlers.get(ACP_SETTINGS_RPC_CHANNEL)).toEqual(expect.any(Function))
   })
 
@@ -88,7 +88,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
-    expect(injected).toContainEqual(['connection'])
+    expect(injected).toContainEqual(['connection', 'webServer'])
     const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
     const started = await handler(RUN_ENDPOINT, { action: 'sign-in' }) as { ok: boolean; value: { started?: boolean } }
     expect(started.ok).toBe(true)
@@ -124,7 +124,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
-    expect(injected).toContainEqual(['connection'])
+    expect(injected).toContainEqual(['connection', 'webServer'])
     const result = await handlers.get(ACP_SETTINGS_RPC_CHANNEL)!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
     const snapshot = decodeSnapshot(result.value)
     expect(snapshot?.rows[0]?.installed).toBe(true)

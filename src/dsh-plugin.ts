@@ -85,7 +85,7 @@ export interface DshPluginContext extends ActivityBindingHostContext {
 }
 
 export const name = 'dsh-acp-antigravity'
-export const inject = ['connection']
+export const inject = ['connection', 'webServer']
 
 function defaultStateDirectory(): string {
   return join(dshHome(), 'profiles', 'web', 'antigravity')
@@ -434,7 +434,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   // reading ctx.connection on the plugin root ctx throws without inject on the
   // target host and takes the whole profile down at load.
   if (typeof ctx.inject !== 'function') throw new Error('dsh-acp-antigravity requires host ctx.inject')
-  ctx.inject(['connection'], scope => registerAcpSettingsRpc(scope, {
+  ctx.inject(['connection', 'webServer'], scope => registerAcpSettingsRpc(scope, {
     snapshot,
     quota: () => quotaReader.snapshot(),
     readActivity: sessionId => activity.store.read(sessionId),
