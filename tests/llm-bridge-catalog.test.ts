@@ -144,17 +144,28 @@ describe('Antigravity LLM catalog Host shape', () => {
     await adapter.dispose()
   })
 
-  it('keeps a deselected row resolvable because saved order is membership, not routing', async () => {
+  it('hides a deselected row from the picker but still resolves it', async () => {
     let cached = [
       { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
       { id: 'gemini-3.7-flash-high', name: 'Gemini 3.7 Flash (High)' },
     ]
     const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => ({
+      order: ['gemini-3.7-flash'],
       overrides: { 'gemini-3.7-flash': { name: 'Gemini 3.7 Flash', reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } } },
     }))
     const listed = await adapter.listModels('antigravity')
-    expect(listed.map(model => model.id)).toEqual(['gemini-3.8-flash', 'gemini-3.7-flash'])
+    expect(listed.map(model => model.id)).toEqual(['gemini-3.7-flash'])
     await expect(adapter.resolveModel('antigravity', 'gemini-3.8-flash')).resolves.toMatchObject({ id: 'gemini-3.8-flash' })
+    await adapter.dispose()
+  })
+
+  it('omits a saved manual row the native catalog cannot resolve', async () => {
+    let cached = [{ id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' }]
+    const adapter = bridgeWithStubProvider(provider(cached), () => cached, next => { cached = [...next] }, undefined, undefined, () => ({
+      order: ['gemini-3.8-flash', 'hand-added'],
+      overrides: { 'hand-added': { name: 'Hand added' } },
+    }))
+    expect((await adapter.listModels('antigravity')).map(model => model.id)).toEqual(['gemini-3.8-flash'])
     await adapter.dispose()
   })
 

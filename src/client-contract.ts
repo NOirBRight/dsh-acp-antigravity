@@ -93,6 +93,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Decode one managed-install progress object. Absent or partial progress stays absent. */
+export function decodeInstallProgress(value: unknown): AcpInstallProgress | undefined {
+  if (!isRecord(value) || typeof value.phase !== 'string' || typeof value.message !== 'string') return undefined
+  if (typeof value.downloadedBytes !== 'number' || typeof value.totalBytes !== 'number') return undefined
+  return { phase: value.phase as AcpInstallProgress['phase'], downloadedBytes: value.downloadedBytes, totalBytes: value.totalBytes, message: value.message }
+}
+
 /** Decode freshly refreshed catalog rows from the host RPC. */
 export function decodeCatalogModels(value: unknown): AcpCatalogModel[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -188,9 +195,7 @@ export function decodeSnapshot(value: unknown): AcpSettingsSnapshot | undefined 
       ...(typeof row.authorizationUrl === 'string' ? { authorizationUrl: row.authorizationUrl } : {}),
     })
   }
-  const install = isRecord(value.install) && typeof value.install.phase === 'string' && typeof value.install.message === 'string' && typeof value.install.downloadedBytes === 'number' && typeof value.install.totalBytes === 'number'
-    ? { phase: value.install.phase as AcpInstallProgress['phase'], downloadedBytes: value.install.downloadedBytes, totalBytes: value.install.totalBytes, message: value.install.message }
-    : undefined
+  const install = decodeInstallProgress(value.install)
   return { title: 'External Agents', rows, ...(install === undefined ? {} : { install }), ...(value.signingIn === true ? { signingIn: true } : {}) }
 }
 

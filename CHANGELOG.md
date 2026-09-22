@@ -1,3 +1,9 @@
+## 0.1.13
+
+- Detail page mounts the account model picker, and Install stays on the Account card.
+- Install progress keeps polling after the action epoch changes, so the percent no longer freezes at 0%.
+- Saved catalog membership is what the composer picker lists. A save emits `llm/adapters-updated` so the cached catalog reloads without a restart. Deselected native models still resolve; manual-only ids are not advertised.
+
 ## v0.1.11
 
 ## 0.1.12

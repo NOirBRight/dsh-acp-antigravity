@@ -82,6 +82,8 @@ export interface DshPluginContext extends ActivityBindingHostContext {
   inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void }; connection: DshPluginContext['connection']; modelSwitch?: { adapters: { register: (entry: { provider: string; role: 'agent' }) => () => void } } }) => void): void
   get?(name: string): unknown
   connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
+  /** Cordis emit. Present on the host root; tests may omit it. */
+  emit?(event: 'llm/adapters-updated'): void
 }
 
 export const name = 'dsh-acp-antigravity'
@@ -105,6 +107,11 @@ function resolvePluginConfig(config: DshPluginConfig, persisted?: AcpAntigravity
     ...(merged.catalogOrder === undefined ? {} : { catalogOrder: merged.catalogOrder }),
     ...(merged.catalogOverrides === undefined ? {} : { catalogOverrides: merged.catalogOverrides }),
   }
+}
+
+/** Identity the composer picker must reload for. Path edits do not change it. */
+function catalogStamp(config: { catalogOrder?: readonly string[]; catalogOverrides?: unknown }): string {
+  return JSON.stringify([config.catalogOrder ?? null, config.catalogOverrides ?? null])
 }
 
 function agentFor(ctx: DshPluginContext, sessionId: string | undefined): unknown {
@@ -412,6 +419,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
         requestApproval: input => requestNativeApproval(ctx, input),
       }, () => modelFacts, () => ({
         ...(declaredDefaultModelId === undefined ? {} : { declaredDefaultModelId }),
+        ...(live.catalogOrder === undefined ? {} : { order: live.catalogOrder }),
         ...(live.catalogOverrides === undefined ? {} : { overrides: live.catalogOverrides }),
       }))
       bridge = adapter
@@ -446,10 +454,14 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       return { groups: [{ id: String(installed.provider.info.id), name: live.instanceId === 'default' ? 'Antigravity' : 'Antigravity (' + live.instanceId + ')', models: applyCatalogOverlay(collapseAntigravityModels(models, modelFacts, declaredDefaultModelId), live.catalogOrder, live.catalogOverrides) }] }
     },
     applyConfig: async next => {
+      const catalogChanged = catalogStamp(live) !== catalogStamp(next)
       const remount = next.executablePath !== live.executablePath || next.harnessPath !== live.harnessPath || next.stateDirectory !== live.stateDirectory || next.instanceId !== live.instanceId
       if (remount) await mount(next)
       else live = next
       savePersistedConfig(home, next)
+      // The composer picker caches session.modelCatalog until this event. Plugin
+      // saves do not touch the core settings document, so nothing else invalidates it.
+      if (catalogChanged) ctx.emit?.('llm/adapters-updated')
     },
     run: async (action, value, signal) => {
       if (changing) throw new Error('Antigravity configuration is changing')
@@ -457,6 +469,7 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
       const editor = editors.require(installed.provider.info.id, providerInstanceId(live.instanceId))
       if (action === 'refresh-models') {
         await refreshCatalog(signal)
+        ctx.emit?.('llm/adapters-updated')
         return collapseAntigravityModels(models, modelFacts, declaredDefaultModelId)
       }
       if (action === 'pick-harness-sibling' && typeof value === 'string') {

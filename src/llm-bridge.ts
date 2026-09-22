@@ -16,7 +16,7 @@ import {
   type ExternalAgentUserInputRequest,
 } from '@deepseek-ai/dsh-acp-provider'
 import type { StreamChunk, ResolvedRetryPolicy, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CatalogOverlay, type CollapsedAntigravityModel } from './catalog.js'
+import { applyCatalogOverlay, collapseAntigravityModels, nativeAntigravityModelId, peelEffort, type CatalogOverlay, type CollapsedAntigravityModel } from './catalog.js'
 import type { ModelFacts } from './model-metadata.js'
 import { isRecord } from './decode.js'
 import { acpUsage, hostUsage, reportedUsage, withTelemetryKeys } from './usage.js'
@@ -174,7 +174,9 @@ export interface AntigravityResolvedModel {
 export interface AntigravityCatalogContext {
   /** Account-declared default model; its effort is that model's default level. */
   readonly declaredDefaultModelId?: string
-  /** Saved per-id field overrides; membership stays the discovered catalog. */
+  /** Saved picker membership. Absent means every discovered row; empty hides every discovered row. */
+  readonly order?: readonly string[]
+  /** Saved per-id field overrides. Routing still resolves a row the picker hid. */
   readonly overrides?: Readonly<Record<string, CatalogOverlay>>
 }
 
@@ -317,7 +319,11 @@ export function createAntigravityLlmBridge(
     imageRequestPricing: () => undefined,
     listModels: async provider => {
       const native = await nativeModels(false)
-      return collapseNative(native).map(model => ({ provider, id: model.id, name: model.name }))
+      const collapsed = collapseNative(native)
+      const context = getCatalogContext?.()
+      const overlaid = context?.order === undefined ? collapsed : applyCatalogOverlay(collapsed, context.order, context.overrides)
+      const resolvable = new Set(collapsed.map(model => model.id))
+      return overlaid.filter(model => resolvable.has(model.id)).map(model => ({ provider, id: model.id, name: model.name }))
     },
     resolveModel: async (provider, model) => {
       const natives = await nativeModels(true)

@@ -209,9 +209,11 @@ describe('antigravity settings card states', () => {
     expect(markup).toContain('data-provider-detail')
     expect(markup).toContain('74%')
     expect(markup).toContain('31%')
-    // The runtime install block folds into advanced settings.
-    expect(markup).toContain('c-advanced')
-    expect(markup).not.toContain('<details class="c-advanced" open')
+    // Install lives on the Account card, not folded into Advanced.
+    expect(markup).toContain(en.install)
+    expect(markup).toContain(en.rescan)
+    expect(markup).toContain('c-account')
+    expect(markup).not.toContain('c-advanced')
     // The legacy card body is not used on the shared detail page.
     expect(markup).not.toContain('data-antigravity-quota')
   })

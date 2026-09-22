@@ -6,7 +6,7 @@ import { ProviderCardHeader, ProviderQuotaMeter, providerUiCss, useProviderQuota
 import type { ProviderDetailCopy, ProviderDetailProps, ProviderItemSlotContext } from 'dsh-llm-providers-ui/provider-detail'
 import { dropPersistedUsageKeys } from 'dsh-llm-providers-ui/usage-readers'
 import { headlineRemainingPercent } from './usage-reader.ts'
-import { decodeCatalogModels, type AcpCatalogModel, type AcpSettingsRow, type AcpSettingsSnapshot, type AntigravityQuotaSnapshot } from '../client-contract.ts'
+import { decodeCatalogModels, decodeInstallProgress, type AcpCatalogModel, type AcpSettingsRow, type AcpSettingsSnapshot, type AntigravityQuotaSnapshot } from '../client-contract.ts'
 import type { AcpSettingsKey } from './locales.ts'
 import { BrandMark } from './BrandMark.tsx'
 import type {} from 'dsh-llm-providers-ui/client'
@@ -173,7 +173,16 @@ function parsePositiveInt(text: string): number | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
-/** Render Install at top when missing, Sign in at top when installed, Account/Quota/Model when connected.
+
+/** Percent label for managed install progress. */
+function formatInstallPercent(downloadedBytes: number, totalBytes: number): string {
+  if (totalBytes <= 0) return '0%'
+  const pct = 100 * downloadedBytes / totalBytes
+  if (downloadedBytes > 0 && pct < 0.1) return '<0.1%'
+  return (Math.round(pct * 10) / 10).toFixed(1).replace(/\.0$/, '') + '%'
+}
+
+/** Render Install on the Account card when missing, Sign in when installed, Account/Quota/Model when connected.
  * @param props the live row, snapshot, quota, and state callbacks.
  * @returns the ordered card sections without runtime path internals.
  */
@@ -322,21 +331,37 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
     setPicker(false)
     setCatalogOpen(true)
   }
+  const modelPicker = (
+    <ModelPickerDialog open={picker} loading={fetching} {...(pickerError === undefined ? {} : { error: pickerError })} labels={{ title: t('pickerTitle'), description: t('pickerDescription'), search: t('pickerSearch'), loading: t('pickerLoading'), empty: t('pickerEmpty'), cancel: t('cancel'), apply: t('applySelected'), close: t('cancel') }}
+      sections={pickerSections}
+      picked={picked} onClose={() => { setPicker(false); setCandidates(null) }} onToggle={id => setPicked(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next })}
+      onApply={adoptModels} />
+  )
   const loginActive = state === 'login'
   const loginUrl = row.authAttempt?.authorizationUrl ?? row.authorizationUrl
   // Prototype C pieces, shared by the legacy body and the migrated detail.
-  const installBlock = (
-    <div className="c-control">
+  const installActions = (
+    <span style={{ display: 'inline-flex', gap: 8 }}>
+      <button type="button" style={button} disabled={working || polling} onClick={() => onAction('install-runtime')}>{polling ? t('installing') : t('install')}</button>
+      <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>
+    </span>
+  )
+  const installStatus = (
+    <>
       <p style={{ ...muted, margin: 0 }}>{row.message ?? t('missingBadge')}</p>
       {snapshot.install && phase !== 'idle' ? (
         <p role="status" className="c-field-hint" style={{ paddingLeft: 0 }}>
           {snapshot.install.message}
-          {snapshot.install.totalBytes > 0 && polling ? ' ' + Math.round(100 * snapshot.install.downloadedBytes / snapshot.install.totalBytes) + '%' : ''}
+          {snapshot.install.totalBytes > 0 ? ' ' + formatInstallPercent(snapshot.install.downloadedBytes, snapshot.install.totalBytes) : ''}
         </p>
       ) : null}
+    </>
+  )
+  const installBlock = (
+    <div className="c-control">
+      {installStatus}
       <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-        <button type="button" style={button} disabled={working || polling} onClick={() => onAction('install-runtime')}>{polling ? t('installing') : t('install')}</button>
-        <button type="button" style={button} disabled={working || polling} onClick={onRefresh}>{t('rescan')}</button>
+        {installActions}
       </div>
     </div>
   )
@@ -504,6 +529,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
   if (mode === 'detail' && sharedTemplate !== undefined && detailCopy !== undefined) {
     const SharedDetail = sharedTemplate
     return (
+      <>
       <SharedDetail
         name="Antigravity"
         role="agent"
@@ -512,8 +538,13 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
         account={{
           state: row.authenticated ? 'connected' : 'unconnected',
           label: row.authenticated ? t('connected') : state === 'missing' ? t('missingBadge') : state === 'error' ? t('errorBadge') : t('authBadge'),
-          actions: accountActions,
-          body: accountBody,
+          actions: showInstall ? installActions : accountActions,
+          body: (
+            <>
+              {showInstall ? installStatus : null}
+              {accountBody}
+            </>
+          ),
         }}
         quota={{
           status: sharedUsage?.status ?? 'loading',
@@ -566,9 +597,11 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
             return index < 0 || model === undefined ? null : modelExtra(model, index)
           },
         }}
-        advanced={installBlock}
         draft={draftBlock}
       />
+      {fetchError === undefined ? null : <p role="status" style={errorStyle}>{fetchError}</p>}
+      {modelPicker}
+      </>
     )
   }
 
@@ -622,10 +655,7 @@ export function AntigravityCardBody({ t, row, snapshot, state, quota, quotaError
       </div>
       {fetchError === undefined ? null : <p role="status" style={errorStyle}>{fetchError}</p>}
       {catalogOpen ? modelsList : null}
-      <ModelPickerDialog open={picker} loading={fetching} {...(pickerError === undefined ? {} : { error: pickerError })} labels={{ title: t('pickerTitle'), description: t('pickerDescription'), search: t('pickerSearch'), loading: t('pickerLoading'), empty: t('pickerEmpty'), cancel: t('cancel'), apply: t('applySelected'), close: t('cancel') }}
-        sections={pickerSections}
-        picked={picked} onClose={() => { setPicker(false); setCandidates(null) }} onToggle={id => setPicked(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next })}
-        onApply={adoptModels} />
+      {modelPicker}
     </section>}
     {draftBlock}
   </>
@@ -660,6 +690,12 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
     snapshotRef.current = next
     setSnapshot(next)
     setDraft(current => mergeSettingsDraft(current, incoming, dirtyRef.current))
+  }
+  const seedInstallProgress = (value: unknown): void => {
+    const install = decodeInstallProgress(value)
+    const current = snapshotRef.current
+    if (install === undefined || current === undefined) return
+    accept({ ...current, install })
   }
   const fetchQuota = async (): Promise<void> => {
     // The settings page owns quota in the shared detail; the card self-loads only in the legacy layout.
@@ -699,15 +735,21 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
   }, [load, readQuota])
   const phase = snapshot?.install?.phase
   const polling = snapshot?.signingIn === true || phase === 'downloading' || phase === 'extracting' || phase === 'verifying'
+  // Install/sign-in polls must not share action's epoch: a concurrent refresh bumps
+  // epoch and would discard every progress snapshot, freezing the UI at 0%.
   useEffect(() => {
     if (!polling) return
     let stopped = false, pending = false
-    const timer = window.setInterval(() => {
-      if (pending) return
+    const tick = (): void => {
+      if (pending || stopped) return
       pending = true
-      const request = epoch.current
-      void load().then(next => { if (!stopped && request === epoch.current && mounted.current) accept(next) }).catch(fail).finally(() => { pending = false })
-    }, 500)
+      void load()
+        .then(next => { if (!stopped && mounted.current) accept(next) })
+        .catch(fail)
+        .finally(() => { pending = false })
+    }
+    tick()
+    const timer = window.setInterval(tick, 500)
     return () => { stopped = true; window.clearInterval(timer) }
   }, [polling, load])
   useEffect(() => { if (snapshot?.rows[0]?.authenticated) void fetchQuota() }, [snapshot?.rows[0]?.authenticated])
@@ -728,7 +770,11 @@ export function ExternalAgentsSection({ t, load, save, run, quota: readQuota, ..
     setWorking(true); setError(undefined)
     epoch.current++
     if (name === 'sign-in' || name === 'sign-out') clearQuota()
-    try { await run(name, value); await refresh() } catch (caught) { fail(caught) }
+    try {
+      const result = await run(name, value)
+      if (name === 'install-runtime') seedInstallProgress(result)
+      await refresh()
+    } catch (caught) { fail(caught) }
     finally { if (mounted.current) setWorking(false) }
   }
   const persist = async (): Promise<void> => {

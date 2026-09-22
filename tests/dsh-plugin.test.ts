@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, decodeSnapshot, name, inject, requestNativeApproval } from '../src/index.js'
-import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
+import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SAVE_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
 
 describe('DSH settings plugin', () => {
   const homes: string[] = []
@@ -44,6 +44,34 @@ describe('DSH settings plugin', () => {
     const catalog = await handler!(CATALOG_ENDPOINT, {}) as { ok: boolean; value: { groups: unknown[] } }
     expect(catalog.ok).toBe(true)
     expect(catalog.value.groups).toEqual([])
+  })
+
+  it('tells the composer picker to reload when saved membership changes', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-acp-catalog-emit-'))
+    homes.push(home)
+    process.env.DSH_HOME = home
+    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const emitted: string[] = []
+    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const ctx = {
+      on: () => () => {},
+      emit: (event: string) => { emitted.push(event) },
+      logger: { warn() {} },
+      effect: (fn: () => unknown) => fn(),
+      inject: (_deps: string[], run: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: () => () => void }; connection: typeof connection }) => unknown) => run({ effect: (fn: () => unknown) => fn(), llm: { registerAdapter: () => () => {} }, connection }),
+      connection,
+    }
+    await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
+    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const save = (order: string[]) => handler(SAVE_ENDPOINT, {
+      executablePath: '', harnessPath: '', stateDirectory: join(home, 'profiles', 'web', 'antigravity'), instanceId: 'default', enabled: true, catalogOrder: order,
+    })
+    expect((await save(['gemini-3.8-flash', 'gemini-3.7-flash']) as { ok: boolean }).ok).toBe(true)
+    expect(emitted).toEqual(['llm/adapters-updated'])
+    expect((await save(['gemini-3.8-flash', 'gemini-3.7-flash']) as { ok: boolean }).ok).toBe(true)
+    expect(emitted).toEqual(['llm/adapters-updated'])
+    expect((await save(['gemini-3.8-flash']) as { ok: boolean }).ok).toBe(true)
+    expect(emitted).toEqual(['llm/adapters-updated', 'llm/adapters-updated'])
   })
 
   it('registers settings RPC through the injected scope when the root ctx refuses connection', async () => {
