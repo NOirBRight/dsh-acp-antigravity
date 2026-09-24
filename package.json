@@ -136,11 +136,11 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.6/deepseek-ai-dsh-acp-provider-0.1.6.tgz",
+    "@deepseek-ai/dsh-acp-provider": "https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.7/deepseek-ai-dsh-acp-provider-0.1.7.tgz",
     "@agentclientprotocol/sdk": "0.25.1"
   },
   "devDependencies": {
-    "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.11/dsh-llm-providers-ui-0.2.11.tgz",
+    "dsh-llm-providers-ui": "https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.12/dsh-llm-providers-ui-0.2.12.tgz",
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-client-connection": "0.1.7-alpha.2",
     "@deepseek-ai/dsh-client-locale": "0.1.7-alpha.2",
