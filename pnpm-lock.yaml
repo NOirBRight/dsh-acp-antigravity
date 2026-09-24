@@ -857,7 +857,7 @@ packages:
     resolution: {integrity: sha512-7z22QmUWiQ/2d0KkdYmANbRUVABpZ9SNYyH5vx6PZ+nE5bcC0l7uFvEfHlyld/HcGBFTL536ClDt3DEcSlEJAQ==}
 
   dsh-llm-providers-ui@https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.12/dsh-llm-providers-ui-0.2.12.tgz:
-    resolution: {tarball: https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.12/dsh-llm-providers-ui-0.2.12.tgz}
+    resolution: {integrity: sha512-zyrGD2esbBxGOnXnHIWindRfdRI+Fl48Oom18tL/OxvMaiilzT5Y/WhC3kIaSEld9I3MoHWWVsm9xsFqOyaYcA==, tarball: https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.12/dsh-llm-providers-ui-0.2.12.tgz}
     version: 0.2.12
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
