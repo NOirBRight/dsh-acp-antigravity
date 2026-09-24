@@ -29,19 +29,19 @@ export interface ActivityBindingHostContext {
 /** Read-only access to plugin-owned activity. */
 export type ActivityBindingStore = Pick<AntigravityActivityStore, 'read'>
 
-/** Exact-session log as `Session.snapshotEvents()` returns it. Structural: no Core import. */
+/** Raw exact-session event shape returned by public session-query reads. */
 export interface SessionLogEvent {
   readonly type: string
   readonly data?: unknown
 }
 
-/** Read one live session log; undefined when the session cannot be resolved. */
-export type SessionLogReader = (sessionId: string) => readonly SessionLogEvent[] | undefined
+/** Read canonical session history; unavailable history blocks unbound native execution. */
+export type SessionLogReader = (sessionId: string) => readonly SessionLogEvent[] | undefined | Promise<readonly SessionLogEvent[] | undefined>
 
 /** Register the binding guard for the installer's lifetime.
  * @param ctx - Host context whose `llm/stream` waterfall the guard joins.
  * @param store - Sidecar reader answering binding per session id.
- * @param readSessionLog - Exact-session `snapshotEvents` reader; unavailable history blocks unbound native execution.
+ * @param readSessionLog - Public exact-session history reader; unavailable history blocks unbound native execution.
  * @returns Disposer removing the listener.
  */
 export function installActivityBindingGuard(
@@ -72,13 +72,22 @@ function decideActivityBinding(
     )
   }
   if (!bound) {
-    if (options.provider === ACTIVITY_NATIVE_PROVIDER && dshHistoryLocked(options.messages, readSessionLog, sessionId)) {
+    if (options.provider !== ACTIVITY_NATIVE_PROVIDER) return next()
+    if (hasPriorModelTurn(options.messages)) {
       throw new LlmError(
         'This conversation already has DSH history; start a new session to use Antigravity.',
         ACTIVITY_HISTORY_LOCKED,
       )
     }
-    return next()
+    return (async function* (): AsyncGenerator<StreamChunk> {
+      if (await dshHistoryLocked(readSessionLog, sessionId)) {
+        throw new LlmError(
+          'This conversation already has DSH history; start a new session to use Antigravity.',
+          ACTIVITY_HISTORY_LOCKED,
+        )
+      }
+      yield* next()
+    })()
   }
   if (options.provider === ACTIVITY_NATIVE_PROVIDER) return next()
   throw new LlmError(
@@ -87,15 +96,13 @@ function decideActivityBinding(
   )
 }
 
-function dshHistoryLocked(
-  messages: GenerateOptions['messages'],
+async function dshHistoryLocked(
   readSessionLog: SessionLogReader,
   sessionId: string,
-): boolean {
-  if (hasPriorModelTurn(messages)) return true
+): Promise<boolean> {
   let events: readonly SessionLogEvent[] | undefined
   try {
-    events = readSessionLog(sessionId)
+    events = await readSessionLog(sessionId)
     if (events === undefined) throw new Error('Session history is unavailable')
   } catch {
     // Canonical session history is required to distinguish first native turns from prior DSH headers.

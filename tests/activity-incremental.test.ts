@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ACP_SETTINGS_RPC_METHOD } from '../src/client-contract.js'
 import {
   ACTIVITY_ENDPOINT,
   ACTIVITY_READ_AFTER_ENDPOINT,
@@ -30,10 +31,19 @@ function afterSeqOf(payload: unknown): number {
     : -1
 }
 
+function unwrapRpc(channel: string, method: string, value: unknown): { endpoint: string; payload: unknown } {
+  const envelope = value as { endpoint?: unknown; payload?: unknown } | null
+  if (channel !== '/api' || method !== ACP_SETTINGS_RPC_METHOD || typeof envelope?.endpoint !== 'string') {
+    throw new Error('Unexpected Antigravity plugin RPC envelope')
+  }
+  return { endpoint: envelope.endpoint, payload: envelope.payload }
+}
+
 function rpcFace(reply: (endpoint: string, payload: unknown) => Reply): { rpc: ActivityRpc; calls: Array<{ endpoint: string; payload: unknown }> } {
   const calls: Array<{ endpoint: string; payload: unknown }> = []
   const rpc: ActivityRpc = {
-    call: async (_channel, endpoint, payload) => {
+    call: async (channel, method, request) => {
+      const { endpoint, payload } = unwrapRpc(channel, method, request)
       calls.push({ endpoint, payload })
       return reply(endpoint, payload)
     },
@@ -301,7 +311,9 @@ describe('native history subscription', () => {
     const cursors: number[] = []
     let pendingSignal: AbortSignal | undefined
     const rpc: ActivityRpc = {
-      call: async (_channel, _endpoint, payload, signal) => {
+      call: async (channel, method, envelope, signal) => {
+        const { endpoint, payload } = unwrapRpc(channel, method, envelope)
+        expect(endpoint).toBe(ACTIVITY_READ_AFTER_ENDPOINT)
         cursors.push(afterSeqOf(payload))
         if (cursors.length === 1) return page([ready(1), start(2, 't1', owned)], 2, true)
         if (cursors.length === 2) { pendingSignal = signal; return held }
@@ -347,7 +359,8 @@ describe('native history subscription', () => {
     let release: (() => void) | undefined
     const held = new Promise<void>(resolve => { release = resolve })
     const rpc: ActivityRpc = {
-      call: async (_channel, endpoint) => {
+      call: async (channel, method, envelope) => {
+        const { endpoint } = unwrapRpc(channel, method, envelope)
         calls.push(endpoint)
         if (calls.length === 1) await held
         return page([ready(1), start(2, 't1', owned)], 2, false)

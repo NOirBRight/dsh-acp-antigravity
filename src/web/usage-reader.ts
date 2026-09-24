@@ -1,6 +1,6 @@
 /** Normalize the provider-owned account quota RPC for the shared usage directory. */
 import type { ProviderUsageReader } from 'dsh-llm-providers-ui/usage-readers'
-import { ACP_SETTINGS_RPC_CHANNEL, QUOTA_ENDPOINT, decodeQuotaSnapshot } from '../client-contract.js'
+import { callAcpSettingsRpc, QUOTA_ENDPOINT, decodeQuotaSnapshot } from '../client-contract.js'
 
 /** One-decimal remaining percent shared by the card header, body, and sidebar writer. */
 export function headlineRemainingPercent(fraction: number): number {
@@ -9,7 +9,7 @@ export function headlineRemainingPercent(fraction: number): number {
 
 export function createAntigravityUsageReader(): ProviderUsageReader {
   return { providerKey: 'antigravity', name: 'Antigravity', async read(rpc, _refresh, signal) {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, QUOTA_ENDPOINT, {}, signal)
+    const result = await callAcpSettingsRpc(rpc, QUOTA_ENDPOINT, {}, signal)
     if (!result.ok) return { status: 'error', message: result.error.message }
     const quota = decodeQuotaSnapshot(result.value)
     if (quota === undefined) return { status: 'error', message: 'Invalid Antigravity quota response' }

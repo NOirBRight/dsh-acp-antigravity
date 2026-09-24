@@ -4,7 +4,37 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, decodeSnapshot, name, inject, requestNativeApproval } from '../src/index.js'
-import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, RUN_ENDPOINT, SAVE_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
+import { ACP_SETTINGS_RPC_METHOD, ACP_SETTINGS_RPC_PATH, CATALOG_ENDPOINT, RUN_ENDPOINT, SAVE_ENDPOINT, SNAPSHOT_ENDPOINT } from '../src/client-contract.js'
+import type { DshPluginContext } from '../src/dsh-plugin.js'
+
+type RouteTestHandler = (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>
+
+function createTestConnection(handlers: Map<string, RouteTestHandler>): DshPluginContext['connection'] {
+  return {
+    operator: {} as never,
+    fetch: {
+      register(route) {
+        handlers.set(route.path, async (endpoint, payload, signal) => {
+          const request = new Request(`http://127.0.0.1${route.path}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              type: 'client-request',
+              rpcId: 'test-rpc-id',
+              method: ACP_SETTINGS_RPC_METHOD,
+              payload: { endpoint, payload },
+            }),
+            ...(signal === undefined ? {} : { signal }),
+          })
+          const response = await route.fetch(request)
+          if (!response.ok) throw new Error(`RPC route returned HTTP ${response.status}`)
+          return (await response.json() as { result: unknown }).result
+        })
+        return async () => { handlers.delete(route.path) }
+      },
+    },
+  }
+}
 
 describe('DSH settings plugin', () => {
   const homes: string[] = []
@@ -14,13 +44,13 @@ describe('DSH settings plugin', () => {
 
   it('exports a Cordis plugin that registers settings RPC', async () => {
     expect(name).toBe('dsh-acp-antigravity')
-    expect(inject).toEqual(['connection', 'webServer'])
+    expect(inject).toEqual(['connection'])
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-settings-'))
     homes.push(home)
     process.env.DSH_HOME = home
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const handlers = new Map<string, RouteTestHandler>()
     const injected: string[][] = []
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       logger: { warn() {} },
@@ -32,8 +62,8 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true, modelDiscoveryTimeoutMs: 45_000 })
-    expect(injected).toContainEqual(['connection', 'webServer'])
-    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)
+    expect(injected).toContainEqual(['connection'])
+    const handler = handlers.get(ACP_SETTINGS_RPC_PATH)
     expect(handler).toEqual(expect.any(Function))
     const result = await handler!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
     expect(result.ok).toBe(true)
@@ -50,9 +80,9 @@ describe('DSH settings plugin', () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-catalog-emit-'))
     homes.push(home)
     process.env.DSH_HOME = home
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const handlers = new Map<string, RouteTestHandler>()
     const emitted: string[] = []
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       emit: (event: string) => { emitted.push(event) },
@@ -62,7 +92,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
-    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const handler = handlers.get(ACP_SETTINGS_RPC_PATH)!
     const save = (order: string[]) => handler(SAVE_ENDPOINT, {
       executablePath: '', harnessPath: '', stateDirectory: join(home, 'profiles', 'web', 'antigravity'), instanceId: 'default', enabled: true, catalogOrder: order,
     })
@@ -78,8 +108,8 @@ describe('DSH settings plugin', () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-settings-scope-'))
     homes.push(home)
     process.env.DSH_HOME = home
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const handlers = new Map<string, RouteTestHandler>()
+    const connection = createTestConnection(handlers)
     const injected: string[][] = []
     const ctx = {
       on: () => () => {},
@@ -94,17 +124,17 @@ describe('DSH settings plugin', () => {
       },
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
-    expect(injected).toContainEqual(['connection', 'webServer'])
-    expect(handlers.get(ACP_SETTINGS_RPC_CHANNEL)).toEqual(expect.any(Function))
+    expect(injected).toContainEqual(['connection'])
+    expect(handlers.get(ACP_SETTINGS_RPC_PATH)).toEqual(expect.any(Function))
   })
 
   it('routes sign-in through the coalesced job and sign-out through the editor', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-acp-signin-'))
     homes.push(home)
     process.env.DSH_HOME = home
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const handlers = new Map<string, RouteTestHandler>()
     const injected: string[][] = []
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       logger: { warn() {} },
@@ -116,8 +146,8 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: '', harnessPath: '', enabled: true })
-    expect(injected).toContainEqual(['connection', 'webServer'])
-    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    expect(injected).toContainEqual(['connection'])
+    const handler = handlers.get(ACP_SETTINGS_RPC_PATH)!
     const started = await handler(RUN_ENDPOINT, { action: 'sign-in' }) as { ok: boolean; value: { started?: boolean } }
     expect(started.ok).toBe(true)
     expect(started.value.started).toBe(true)
@@ -138,9 +168,9 @@ describe('DSH settings plugin', () => {
     await writeFile(harness, '#!/bin/sh\nexit 1\n')
     await chmod(server, 0o755)
     await chmod(harness, 0o755)
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
+    const handlers = new Map<string, RouteTestHandler>()
     const injected: string[][] = []
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       logger: { warn() {} },
@@ -152,8 +182,8 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
-    expect(injected).toContainEqual(['connection', 'webServer'])
-    const result = await handlers.get(ACP_SETTINGS_RPC_CHANNEL)!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
+    expect(injected).toContainEqual(['connection'])
+    const result = await handlers.get(ACP_SETTINGS_RPC_PATH)!(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
     const snapshot = decodeSnapshot(result.value)
     expect(snapshot?.rows[0]?.installed).toBe(true)
     expect(snapshot?.rows[0]?.executablePath).toBe(server)
@@ -173,8 +203,8 @@ describe('DSH settings plugin', () => {
     await writeFile(harness, '#!/bin/sh\nexit 1\n')
     await chmod(server, 0o755)
     await chmod(harness, 0o755)
-    const handlers = new Map<string, (endpoint: string, payload: unknown) => Promise<unknown>>()
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const handlers = new Map<string, RouteTestHandler>()
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       logger: { warn() {} },
@@ -183,7 +213,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
-    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const handler = handlers.get(ACP_SETTINGS_RPC_PATH)!
     const validated = await handler(RUN_ENDPOINT, { action: 'validate-installation' }) as { ok: boolean }
     expect(validated.ok).toBe(false)
     const result = await handler(SNAPSHOT_ENDPOINT, {}) as { ok: boolean; value: unknown }
@@ -205,8 +235,8 @@ describe('DSH settings plugin', () => {
     await writeFile(harness, '#!/bin/sh\nexit 0\n')
     await chmod(server, 0o755)
     await chmod(harness, 0o755)
-    const handlers = new Map<string, (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>>()
-    const connection = { rpc: { handle: (channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>) => { handlers.set(channel, handler); return () => handlers.delete(channel) } } }
+    const handlers = new Map<string, RouteTestHandler>()
+    const connection = createTestConnection(handlers)
     const ctx = {
       on: () => () => {},
       logger: { warn() {} },
@@ -215,7 +245,7 @@ describe('DSH settings plugin', () => {
       connection,
     }
     await apply(ctx, { executablePath: server, harnessPath: harness, enabled: true })
-    const handler = handlers.get(ACP_SETTINGS_RPC_CHANNEL)!
+    const handler = handlers.get(ACP_SETTINGS_RPC_PATH)!
     // The mount-time catalog probe runs unawaited; let it settle before measuring the row.
     await new Promise(resolve => setTimeout(resolve, 300))
     const refreshed = await handler(RUN_ENDPOINT, { action: 'refresh-models' }) as { ok: boolean }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-acp-provider/native-ui', () => ({ NativeToolCard: () => null }))
 import {
-  ACP_SETTINGS_RPC_CHANNEL,
+  ACP_SETTINGS_RPC_METHOD,
   SAVE_ENDPOINT,
   SNAPSHOT_ENDPOINT,
   decodeConfig,
@@ -65,7 +65,11 @@ function host() {
 function bench(): { readonly face: AcpSettingsFace; readonly server: ReturnType<typeof host> } {
   const server = host()
   let face: AcpSettingsFace | undefined
-  const call = async (_channel: string, endpoint: string, payload: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message: string } }> => {
+  const call = async (channel: string, method: string, request: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message: string } }> => {
+    const envelope = request as { endpoint?: unknown; payload?: unknown } | null
+    if (channel !== '/api' || method !== ACP_SETTINGS_RPC_METHOD || typeof envelope?.endpoint !== 'string') throw new Error('Unexpected Antigravity plugin RPC envelope')
+    const endpoint = envelope.endpoint
+    const payload = envelope.payload
     if (endpoint === SNAPSHOT_ENDPOINT) return { ok: true, value: server.snapshot() }
     if (endpoint === SAVE_ENDPOINT) {
       try {

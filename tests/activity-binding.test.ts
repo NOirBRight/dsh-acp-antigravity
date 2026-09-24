@@ -96,9 +96,9 @@ function throwingStore(): ActivityBindingStore {
 }
 
 describe('installActivityBindingGuard', () => {
-  it('rejects an unavailable canonical history before first native execution', () => {
+  it('rejects unavailable canonical history before first native execution', async () => {
     const driver = drive(new AntigravityActivityStore(tempRoot()), loopRequest('missing', ACTIVITY_NATIVE_PROVIDER, userOnly()), [], () => undefined)
-    expect(() => driver.run()).toThrow(LlmError)
+    await expect(collect(driver.run())).rejects.toBeInstanceOf(LlmError)
     expect(driver.nextCalls).toBe(0)
   })
 
@@ -189,21 +189,14 @@ describe('installActivityBindingGuard', () => {
     expect(driver.nextCalls).toBe(1)
   })
 
-  it('rejects converting a prior foreign request/header onto Antigravity before any assistant token', () => {
+  it('rejects converting a prior foreign request/header onto Antigravity before any assistant token', async () => {
     const driver = drive(
       new AntigravityActivityStore(tempRoot()),
       loopRequest('busy', ACTIVITY_NATIVE_PROVIDER, userOnly()),
       [],
       () => [requestHeader('deepseek'), requestHeader(ACTIVITY_NATIVE_PROVIDER, 'change')],
     )
-    let failure: unknown
-    try {
-      driver.run()
-    } catch (error) {
-      failure = error
-    }
-    expect(failure).toBeInstanceOf(LlmError)
-    expect((failure as LlmError).code).toBe(ACTIVITY_HISTORY_LOCKED)
+    await expect(collect(driver.run())).rejects.toMatchObject({ code: ACTIVITY_HISTORY_LOCKED })
     expect(driver.nextCalls).toBe(0)
   })
 

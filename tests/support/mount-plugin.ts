@@ -37,7 +37,11 @@ export async function mountPlugin(get: (name: string) => unknown = () => undefin
   const handle = Object.assign(vi.fn(), { replace: vi.fn() })
   const registerAdapter = vi.fn((_providers: string[], _adapter: unknown) => handle)
   const effect = (fn: () => unknown): unknown => fn()
-  const scope = { effect, llm: { registerAdapter }, connection: { rpc: { handle: vi.fn() } } }
+  const connection = {
+    operator: {} as never,
+    fetch: { register: vi.fn(() => () => undefined) },
+  } as unknown as DshPluginContext['connection']
+  const scope = { effect, llm: { registerAdapter }, connection }
   const ctx = {
     ...scope,
     get,

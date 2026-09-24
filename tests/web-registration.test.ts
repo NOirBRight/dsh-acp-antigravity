@@ -50,7 +50,10 @@ describe('client plugin composition', () => {
     expect(loaded?.rows[0]?.modelDiscoveryTimeoutMs).toBe(45_000)
     rpcCall.mockResolvedValueOnce({ ok: true, value: { saved: true } })
     await face.save({ ...loaded!.rows[0]!, enabled: false })
-    expect(rpcCall).toHaveBeenLastCalledWith(expect.any(String), 'save', expect.objectContaining({ enabled: false, modelDiscoveryTimeoutMs: 45_000 }), undefined)
+    expect(rpcCall).toHaveBeenLastCalledWith('/api', 'plugin-rpc/antigravity', {
+      endpoint: 'save',
+      payload: expect.objectContaining({ enabled: false, modelDiscoveryTimeoutMs: 45_000 }),
+    }, undefined)
     expect(decodeSnapshot({ title: 'External Agents', rows: [{ ...row, modelDiscoveryTimeoutMs: 0 }] })).toBeUndefined()
     expect(decodeSnapshot({ title: 'External Agents', rows: [{ ...row, probeFailed: true }] })?.rows[0]?.probeFailed).toBe(true)
     expect(decodeSnapshot({ title: 'External Agents', rows: [row] })?.rows[0]?.probeFailed).toBeUndefined()
@@ -95,7 +98,7 @@ describe('client plugin composition', () => {
       role: 'agent',
       header: 'shared',
       catalogId: 'antigravity',
-      binding: { channel: '/dsh-acp-antigravity', endpoint: 'activity/binding' },
+      binding: { channel: 'plugin-rpc/antigravity', endpoint: 'activity/binding' },
       usage: expect.objectContaining({ read: expect.any(Function) }),
     }))
   })

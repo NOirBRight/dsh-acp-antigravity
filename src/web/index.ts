@@ -9,7 +9,7 @@ import type { UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/cli
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  ACP_SETTINGS_RPC_CHANNEL,
+  ACP_SETTINGS_RPC_METHOD,
   PICK_ENDPOINT,
   QUOTA_ENDPOINT,
   decodeQuotaSnapshot,
@@ -18,6 +18,7 @@ import {
   SNAPSHOT_ENDPOINT,
   decodeSnapshot,
   type AcpSettingsRow,
+  callAcpSettingsRpc,
 } from '../client-contract.ts'
 import { NativeTurnContainer } from './NativeTurnContainer.tsx'
 import { nativeTurnDefinition } from './native-turn.ts'
@@ -91,10 +92,10 @@ export function apply(ctx: ClientContext): void {
   }
   installProviderDirectory(ctx, () => acceptedRow?.models.length, {
     account: () => ({ state: account.state }),
-    binding: { channel: ACP_SETTINGS_RPC_CHANNEL, endpoint: ACTIVITY_BINDING_ENDPOINT },
+    binding: { channel: ACP_SETTINGS_RPC_METHOD, endpoint: ACTIVITY_BINDING_ENDPOINT },
   })
   const load: AcpSettingsFace['load'] = async () => {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SNAPSHOT_ENDPOINT, {}, undefined)
+    const result = await callAcpSettingsRpc(rpc, SNAPSHOT_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
     const decoded = decodeSnapshot(result.value)
     if (decoded === undefined) throw new Error(t('failed'))
@@ -105,7 +106,7 @@ export function apply(ctx: ClientContext): void {
     return decoded
   }
   const quota: AcpSettingsFace['quota'] = async signal => {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, QUOTA_ENDPOINT, {}, signal)
+    const result = await callAcpSettingsRpc(rpc, QUOTA_ENDPOINT, {}, signal)
     if (!result.ok) throw new Error(result.error.message)
     const decoded = decodeQuotaSnapshot(result.value)
     if (decoded === undefined) throw new Error(t('quotaUnavailable'))
@@ -132,7 +133,7 @@ export function apply(ctx: ClientContext): void {
       }
       if (Object.keys(flags).length > 0) catalogOverrides[model.id] = { id: model.id, name: model.name, ...over }
     }
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, SAVE_ENDPOINT, {
+    const result = await callAcpSettingsRpc(rpc, SAVE_ENDPOINT, {
       executablePath: row.executablePath,
       harnessPath: row.harnessPath,
       stateDirectory: row.stateDirectory,
@@ -146,14 +147,14 @@ export function apply(ctx: ClientContext): void {
     if (!result.ok) throw new Error(result.error.message)
   }
   const run: AcpSettingsFace['run'] = async (action, value) => {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, RUN_ENDPOINT, { action, ...(value === undefined ? {} : { value }) }, undefined)
+    const result = await callAcpSettingsRpc(rpc, RUN_ENDPOINT, { action, ...(value === undefined ? {} : { value }) }, undefined)
     if (!result.ok) throw new Error(result.error.message)
     if (action === 'sign-out' || action === 'sign-in') invalidateUsage()
     if (action === 'sign-out') publishAccount('unconnected')
     return result.value
   }
   const pick: AcpSettingsFace['pick'] = async () => {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, PICK_ENDPOINT, {}, undefined)
+    const result = await callAcpSettingsRpc(rpc, PICK_ENDPOINT, {}, undefined)
     if (!result.ok) throw new Error(result.error.message)
     const path = (result.value as { path?: string | null }).path
     return path ?? null

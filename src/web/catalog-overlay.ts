@@ -1,5 +1,5 @@
 /** Overlay ready External Agent groups onto a ModelDirectory instance. */
-import { ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT } from '../client-contract.js'
+import { callAcpSettingsRpc, CATALOG_ENDPOINT } from '../client-contract.js'
 
 export interface CatalogGroup {
   readonly id: string
@@ -58,10 +58,11 @@ export function overlayDirectory(inner: OverlayDirectory, fetchCatalog: () => Pr
   return inner
 }
 
-export async function fetchExternalCatalog(rpc: { call: (channel: string, endpoint: string, payload: unknown, extra: undefined) => Promise<{ ok: boolean; value?: { groups?: CatalogGroup[] } }> }): Promise<readonly CatalogGroup[]> {
+export async function fetchExternalCatalog(rpc: { call: (channel: string, endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<{ ok: boolean; value?: unknown }> }): Promise<readonly CatalogGroup[]> {
   try {
-    const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, CATALOG_ENDPOINT, {}, undefined)
-    return result.ok && Array.isArray(result.value?.groups) ? result.value.groups : []
+    const result = await callAcpSettingsRpc(rpc, CATALOG_ENDPOINT, {}, undefined)
+    const groups = (result.value as { groups?: unknown } | undefined)?.groups
+    return result.ok && Array.isArray(groups) ? groups as CatalogGroup[] : []
   } catch {
     return []
   }

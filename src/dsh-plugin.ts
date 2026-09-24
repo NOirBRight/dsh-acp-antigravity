@@ -1,9 +1,11 @@
-/** Cordis host plugin: External Agents Settings through settings.section RPC. */
+/** Cordis host plugin: External Agents Settings through authenticated plugin RPC. */
 import { ExternalAgentProviderRegistry, providerInstanceId } from '@deepseek-ai/dsh-acp-provider'
 import { ExternalAgentSettingsEditorRegistry } from '@deepseek-ai/dsh-acp-provider/settings'
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { join } from 'node:path'
 import { allowDshRuntime } from './compatibility.js'
-import type { ActivityBindingHostContext } from './activity-binding.js'
+import type { ActivityBindingHostContext, SessionLogEvent } from './activity-binding.js'
 import { ANTIGRAVITY_FULL_ACCESS_AUTHORIZED, nativeSessionBinding } from './activity-contract.js'
 import { AntigravityActivityStore, type AntigravityActivityEvent } from './activity-store.js'
 import { AntigravityActivityCoalescer } from './activity-coalescer.js'
@@ -81,13 +83,13 @@ export interface DshPluginContext extends ActivityBindingHostContext {
   effect(fn: () => unknown, name?: string): void
   inject?(deps: string[], fn: (scope: { effect: (fn: () => unknown) => unknown; llm: { registerAdapter: (providers: string[], adapter: unknown) => () => void }; connection: DshPluginContext['connection']; modelSwitch?: { adapters: { register: (entry: { provider: string; role: 'agent' }) => () => void } } }) => void): void
   get?(name: string): unknown
-  connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>): unknown } }
+  connection: Pick<HostConnectionHandle, 'fetch' | 'operator'>
   /** Cordis emit. Present on the host root; tests may omit it. */
   emit?(event: 'llm/adapters-updated'): void
 }
 
 export const name = 'dsh-acp-antigravity'
-export const inject = ['connection', 'webServer']
+export const inject = ['connection']
 
 function defaultStateDirectory(): string {
   return join(dshHome(), 'profiles', 'web', 'antigravity')
@@ -210,9 +212,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
   const home = dshHome()
   const activity = createAntigravityActivityWriter(join(home, 'plugin-data', 'antigravity', 'history'))
   const { installActivityBindingGuard } = await import('./activity-binding.js')
-  installActivityBindingGuard(ctx, activity.store, sessionId => {
-    const agent = agentFor(ctx, sessionId) as { session?: { snapshotEvents?: () => readonly { readonly type: string; readonly data?: unknown }[] } } | undefined
-    return agent?.session?.snapshotEvents?.()
+  installActivityBindingGuard(ctx, activity.store, async sessionId => {
+    const sessionQuery = ctx.get?.('sessionQuery') as { readSession?: (id: SessionId) => Promise<{ events: readonly SessionLogEvent[] }> } | undefined
+    if (typeof sessionQuery?.readSession !== 'function') return undefined
+    return (await sessionQuery.readSession(sessionId as SessionId)).events
   })
   const appendActivity = (sessionId: string | undefined, events: readonly AntigravityActivityEvent[]): void => {
     activity.append(sessionId, events)
@@ -439,11 +442,10 @@ export async function apply(ctx: DshPluginContext, config: DshPluginConfig = {})
     catch (error) { console.error('dsh-acp-antigravity: activity flush during session disposal failed', error) }
     await bridge?.release(session.id)
   })
-  // The settings channel must register through an injected connection scope:
-  // reading ctx.connection on the plugin root ctx throws without inject on the
-  // target host and takes the whole profile down at load.
+  // Connection owns the authenticated `/api` carrier; inject it so this route
+  // stays scoped to the plugin fiber and disposes with that scope.
   if (typeof ctx.inject !== 'function') throw new Error('dsh-acp-antigravity requires host ctx.inject')
-  ctx.inject(['connection', 'webServer'], scope => registerAcpSettingsRpc(scope, {
+  ctx.inject(['connection'], scope => registerAcpSettingsRpc(scope, {
     snapshot,
     quota: () => quotaReader.snapshot(),
     readActivity: sessionId => activity.store.read(sessionId),

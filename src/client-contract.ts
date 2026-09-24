@@ -1,12 +1,23 @@
 /** Browser-safe RPC contract for the External Agents settings page. */
 
-export const ACP_SETTINGS_RPC_CHANNEL = '/dsh-acp-antigravity'
+export const ACP_SETTINGS_RPC_METHOD = 'plugin-rpc/antigravity'
+export const ACP_SETTINGS_RPC_PATH = `/api/${ACP_SETTINGS_RPC_METHOD}`
 export const SNAPSHOT_ENDPOINT = 'snapshot'
 export const SAVE_ENDPOINT = 'save'
 export const RUN_ENDPOINT = 'run'
 export const PICK_ENDPOINT = 'pick'
 export const CATALOG_ENDPOINT = 'catalog'
 export const QUOTA_ENDPOINT = 'quota'
+
+/** Call one Antigravity business endpoint over the authenticated shared API route. */
+export function callAcpSettingsRpc<Result>(
+  rpc: { call: (channel: string, endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<Result> },
+  endpoint: string,
+  payload: unknown,
+  signal?: AbortSignal,
+): Promise<Result> {
+  return rpc.call('/api', ACP_SETTINGS_RPC_METHOD, { endpoint, payload }, signal)
+}
 
 /** Persisted Settings values for one Antigravity instance. */
 export interface AcpAntigravitySettingsConfig {

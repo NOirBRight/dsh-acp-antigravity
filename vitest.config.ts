@@ -36,5 +36,5 @@ const providerAlias = providerDir ? providerSourceAlias(providerDir) : []
 export default defineConfig({
   esbuild: { jsx: 'automatic' },
   test: { environment: 'node', include: ['tests/**/*.test.ts'] },
-  ...(providerAlias.length > 0 ? { resolve: { alias: providerAlias } } : {}),
+  resolve: { dedupe: ['react', 'react-dom'], ...(providerAlias.length > 0 ? { alias: providerAlias } : {}) },
 })

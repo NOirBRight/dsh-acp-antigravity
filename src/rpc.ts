@@ -1,6 +1,8 @@
 /** Host RPC for the External Agents settings page. */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { clientRequestSchema, type HostConnectionHandle, type PeerScope } from '@deepseek-ai/dsh-client-connection'
+import { isRecord } from './decode.js'
 import {
   ACTIVITY_BINDING_ENDPOINT,
   ACTIVITY_ENDPOINT,
@@ -14,7 +16,8 @@ import {
   type AntigravityActivityPage,
 } from './activity-contract.js'
 import {
-  ACP_SETTINGS_RPC_CHANNEL,
+  ACP_SETTINGS_RPC_METHOD,
+  ACP_SETTINGS_RPC_PATH,
   PICK_ENDPOINT,
   QUOTA_ENDPOINT,
   RUN_ENDPOINT,
@@ -27,7 +30,10 @@ import {
   type AntigravityQuotaSnapshot,
 } from './client-contract.js'
 
-type RpcResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details?: object } }
+type RpcAttachment = { readonly path: readonly (string | number)[]; readonly bytes: Uint8Array }
+type RpcResult =
+  | { readonly ok: true; readonly value: unknown; readonly attachments?: readonly RpcAttachment[] }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details?: object } }
 
 function fail(message: string): RpcResult {
   return { ok: false, error: { code: 'internal', message } }
@@ -54,8 +60,8 @@ export interface AcpSettingsRpcDeps {
 }
 
 /** Handle snapshot, save, provider actions, and executable picking. */
-export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult> {
-  return async (endpoint, payload, signal) => {
+export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint: string, payload: unknown, signal?: AbortSignal, operator?: PeerScope) => Promise<RpcResult> {
+  return async (endpoint, payload, signal, _operator) => {
     if (endpoint === SNAPSHOT_ENDPOINT) return { ok: true, value: await deps.snapshot() }
     if (endpoint === CATALOG_ENDPOINT) return { ok: true, value: await deps.catalog() }
     if (endpoint === QUOTA_ENDPOINT) {
@@ -121,10 +127,68 @@ export function createAcpSettingsRpcHandler(deps: AcpSettingsRpcDeps): (endpoint
   }
 }
 
-/** Register the host channel and attach its disposer to this fiber. */
-export function registerAcpSettingsRpc(ctx: { effect(fn: () => unknown, name?: string): void; connection: { rpc: { handle(channel: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>): unknown } } }, deps: AcpSettingsRpcDeps): void {
+
+function rpcResponse(rpcId: string, result: RpcResult): Response {
+  if (!result.ok) {
+    return Response.json({
+      type: 'server-response',
+      rpcId,
+      result: {
+        ok: false,
+        error: { ...result.error, details: result.error.details ?? {} },
+      },
+    })
+  }
+  const { attachments, ...success } = result
+  const response = { type: 'server-response', rpcId, result: success }
+  if (attachments === undefined || attachments.length === 0) return Response.json(response)
+  const parts = new FormData()
+  const attachmentMetadata = attachments.map((attachment, index) => {
+    const part = `bytes-${index}`
+    parts.set(part, new Blob([new Uint8Array(attachment.bytes)]))
+    return { path: [...attachment.path], codec: 'bytes', part }
+  })
+  parts.set('metadata', JSON.stringify({ ...response, attachments: attachmentMetadata }))
+  return new Response(parts)
+}
+
+/** Register one authenticated exact route and attach its disposer to this fiber. */
+export function registerAcpSettingsRpc(
+  ctx: {
+    effect(fn: () => unknown, name?: string): void
+    connection: Pick<HostConnectionHandle, 'fetch' | 'operator'>
+  },
+  deps: AcpSettingsRpcDeps,
+): void {
+  const handler = createAcpSettingsRpcHandler(deps)
   ctx.effect(
-    () => ctx.connection.rpc.handle(ACP_SETTINGS_RPC_CHANNEL, createAcpSettingsRpcHandler(deps)),
+    () => ctx.connection.fetch.register({
+      path: ACP_SETTINGS_RPC_PATH,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async request => {
+        const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+        if (contentType !== 'application/json') return new Response('Unsupported Media Type', { status: 415 })
+        let raw: unknown
+        try {
+          raw = await request.json()
+        } catch {
+          return new Response('Bad Request', { status: 400 })
+        }
+        const parsed = clientRequestSchema.safeParse(raw)
+        if (!parsed.success || parsed.data.method !== ACP_SETTINGS_RPC_METHOD) return new Response('Bad Request', { status: 400 })
+        const payload = parsed.data.payload
+        if (!isRecord(payload) || typeof payload.endpoint !== 'string') {
+          return new Response('Bad Request', { status: 400 })
+        }
+        try {
+          const result = await handler(payload.endpoint, payload.payload, request.signal, ctx.connection.operator)
+          return rpcResponse(parsed.data.rpcId, result)
+        } catch {
+          return new Response('Internal Server Error', { status: 500 })
+        }
+      },
+    }),
     'dsh-acp-antigravity: settings RPC',
   )
 }

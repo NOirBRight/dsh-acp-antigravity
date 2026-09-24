@@ -25,7 +25,7 @@ import {
   foldAntigravityToolEvent,
   type AntigravityToolState,
 } from '../tool-events.js'
-import { ACP_SETTINGS_RPC_CHANNEL } from '../client-contract.js'
+import { callAcpSettingsRpc } from '../client-contract.js'
 import {
   ACTIVITY_READ_AFTER_ENDPOINT,
   ACTIVITY_STALE_CURSOR,
@@ -214,7 +214,7 @@ export interface ActivityRpc {
 
 /** Read one bounded page strictly after the retained cursor. */
 async function loadActivityPage(rpc: ActivityRpc, sessionId: string, afterSeq: number, signal: AbortSignal): Promise<AntigravityActivityPage> {
-  const result = await rpc.call(ACP_SETTINGS_RPC_CHANNEL, ACTIVITY_READ_AFTER_ENDPOINT, { sessionId, afterSeq }, signal)
+  const result = await callAcpSettingsRpc(rpc, ACTIVITY_READ_AFTER_ENDPOINT, { sessionId, afterSeq }, signal)
   if (!result.ok) {
     const message = result.error?.message ?? 'Antigravity activity history is unavailable'
     if (result.error?.code === ACTIVITY_STALE_CURSOR) throw new StaleNativeHistoryCursorError(message)
