@@ -42,12 +42,16 @@ describe('DSH forward compatibility policy', () => {
       dsh?: { compatibility?: { dshReleases?: Record<string, string> } }
       peerDependencies?: Record<string, string>
     }
-    const release = '0.1.7-alpha.2'
+    const minimum = '>=0.1.7-alpha.2'
+    const releaseEvidence = {
+      '0.1.7-alpha.2': 'compatible',
+      '0.1.7-rc.1': 'compatible',
+    }
     const peers = Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
-    expect(manifest.dsh?.compatibility?.dshReleases).toEqual({ [release]: 'compatible' })
+    expect(manifest.dsh?.compatibility?.dshReleases).toEqual(releaseEvidence)
     expect(peers.length).toBeGreaterThan(0)
     for (const [, range] of peers) {
-      expect(range).toBe(release)
+      expect(range).toBe(minimum)
     }
   })
 })

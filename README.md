@@ -6,7 +6,7 @@ This package adapts the official @agentclientprotocol/sdk to the provider-neutra
 
 ## Compatibility
 
-Host `@deepseek-ai/dsh-*` packages are not version-locked: peers are `*` and optional. `devDependencies` pin the compile target (`0.1.5-rc.1`). Cordis stays `>=4.0.2 <5.0.0`.
+Host `@deepseek-ai/dsh-*` packages are optional peers with a minimum of `0.1.7-alpha.2`; the compile lock targets `0.1.7-rc.1`. Cordis peers support `>=4.0.4 <5.0.0`. DSH `0.1.7-alpha.2` and `0.1.7-rc.1` are verified in `package.json#dsh.compatibility.dshReleases`.
 
 Verified Hosts in `package.json#dsh.compatibility.dshReleases` are evidence, not an allowlist. Unknown newer Hosts warn once and keep the normal mount path. Only a reproduced failure is blocklisted.
 
@@ -21,9 +21,9 @@ Latest (Owner + Model Switch + ACP provider + this plugin):
 ```sh
 dsh plugin --profile web add --force \
   https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui-0.2.9.tgz \
-  https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.6/deepseek-ai-dsh-acp-provider-0.1.6.tgz \
+  https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.8/deepseek-ai-dsh-acp-provider-0.1.8.tgz \
   https://github.com/NOirBRight/dsh-model-switch/releases/latest/download/dsh-model-switch-0.4.10.tgz \
-  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-dsh-acp-antigravity-0.1.11.tgz
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/latest/download/deepseek-ai-dsh-acp-antigravity-0.1.16.tgz
 dsh plugin --profile web list
 ```
 
@@ -32,9 +32,9 @@ Fixed versions:
 ```sh
 dsh plugin --profile web add --force \
   https://github.com/NOirBRight/dsh-llm-providers-ui/releases/download/v0.2.9/dsh-llm-providers-ui-0.2.9.tgz \
-  https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.6/deepseek-ai-dsh-acp-provider-0.1.6.tgz \
+  https://github.com/NOirBRight/dsh-acp-provider/releases/download/v0.1.8/deepseek-ai-dsh-acp-provider-0.1.8.tgz \
   https://github.com/NOirBRight/dsh-model-switch/releases/download/v0.4.10/dsh-model-switch-0.4.10.tgz \
-  https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.11/deepseek-ai-dsh-acp-antigravity-0.1.11.tgz
+  https://github.com/NOirBRight/dsh-acp-antigravity/releases/download/v0.1.16/deepseek-ai-dsh-acp-antigravity-0.1.16.tgz
 ```
 
 Then open Settings → Antigravity → Install. That downloads the pinned Google ACP zip, verifies SHA-256, and extracts `agy_acp_server.par` plus `localharness_external` (Windows: `.exe`). Linux and Windows use the stock binaries as shipped. The plugin tarball does not ship Google binaries and does not patch them. Point the card at an existing pair if you already have one.
