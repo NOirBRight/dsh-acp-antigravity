@@ -49,6 +49,7 @@
     "scripts/check-agy-request-telemetry.py",
     "scripts/agy-user-question.patch",
     "scripts/check-agy-user-question.py",
+    "scripts/check-dsh-host-ranges.mjs",
     "LICENSE"
   ],
   "engines": {
@@ -57,9 +58,11 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json",
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && tsdown && node scripts/check-client-bundle.mjs",
-    "test": "vitest run",
+    "test": "pnpm run check:dsh-host-ranges && vitest run",
     "check": "pnpm run typecheck && pnpm run test && pnpm run build",
-    "check:provider": "node scripts/check-provider.mjs"
+    "check:provider": "node scripts/check-provider.mjs",
+    "check:dsh-host-ranges": "node scripts/check-dsh-host-ranges.mjs",
+    "prepack": "pnpm run check:dsh-host-ranges"
   },
   "dsh": {
     "bundle": {
